@@ -124,6 +124,9 @@ class GameLink:
             self.battle.phase = msg.get("phase", self.battle.phase)
         elif kind == "applied":
             self.battle.applied.append(msg)
+        elif kind == "units":  # units that joined after the start (reinforcements): their static info
+            have = {u["id"] for u in self.battle.start["units"]}
+            self.battle.start["units"].extend(u for u in msg.get("units", []) if u["id"] not in have)
         elif kind == "battle_end":
             self.battle.ended = True
 
@@ -145,7 +148,10 @@ class GameLink:
             self._write(take, [], same_seq=True)
 
     def _write(self, take, orders, same_seq=False) -> None:
-        body = {"battle": self.battle.id, "seq": self._seq, "written": int(time.time()), "take": list(take),
+        # `beat` changes with every write: the bridge times the server's silence in battle ticks (its Lua numbers
+        # are 32-bit floats, too coarse for wall-clock timestamps)
+        self._beat = (getattr(self, "_beat", 0) + 1) % 1_000_000
+        body = {"battle": self.battle.id, "seq": self._seq, "beat": self._beat, "take": list(take),
                 "orders": orders if not same_seq else self._last_orders, "say": self.say}
         if not same_seq:
             self._last_orders = orders

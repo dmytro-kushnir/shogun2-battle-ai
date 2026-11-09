@@ -85,11 +85,21 @@ end
 
 -- ------------------------------------------------------------------ units
 
-local function unit_id(a, r, u) return a * 10000 + r * 100 + u end
+-- Stable unit ids. The engine compacts an army's unit list when a unit is destroyed, so a list position does not
+-- identify a unit (at Sekigahara, ids built from positions pointed at other units after the first losses). A unit
+-- keeps its name (historical battles: "Ukita_Hideie_3"; custom/campaign: "1", "2", ... per army) and its type, so
+-- alliance + name + type (+ an occurrence number for exact duplicates) is the key; ids are handed out in order of
+-- first sighting: alliance * 10000 + n.
+local function unit_key(a, unit, seen)
+	local key = a .. "|" .. tostring(call(unit, "name")) .. "|" .. tostring(call(unit, "type"))
+	seen[key] = (seen[key] or 0) + 1
+	return key .. "#" .. seen[key]
+end
 
 -- refresh B.units (id -> {unit, army, alliance}) from the battle; cheap, done every tick (reinforcements)
 local function scan()
-	local units = {}
+	local units, seen = {}, {}
+	B.keys, B.next_n = B.keys or {}, B.next_n or {}
 	local alliances = B.battle:alliances()
 	for a = 1, alliances:count() do
 		local armies = alliances:item(a):armies()
@@ -97,7 +107,15 @@ local function scan()
 			local army = armies:item(r)
 			local list = army:units()
 			for u = 1, list:count() do
-				units[unit_id(a, r, u)] = { unit = list:item(u), army = army, alliance = a, army_index = r }
+				local unit = list:item(u)
+				local key = unit_key(a, unit, seen)
+				local id = B.keys[key]
+				if not id then
+					B.next_n[a] = (B.next_n[a] or 0) + 1
+					id = a * 10000 + B.next_n[a]
+					B.keys[key] = id
+				end
+				units[id] = { unit = unit, army = army, alliance = a, army_index = r }
 			end
 		end
 	end
@@ -157,9 +175,19 @@ local function take(id)
 	return uc
 end
 
+-- release_control() on a unit the engine has already taken down crashes the game (CE.dll+0x2f6703 reads a null
+-- unit field; seen when a campaign battle ended). So only hand back units that are verifiably still on the field,
+-- and once the battle is over never touch the engine's controllers again: just forget them.
+local function on_field(id)
+	local e = B.units and B.units[id]
+	if not e or B.over then return false end
+	local men = call(e.unit, "number_of_men_alive")
+	return men ~= nil and men > 0 and not call(e.unit, "is_leaving_battle")
+end
+
 local function release(id)
 	local uc = B.controlled[id]
-	if uc then pcall(function() uc:release_control() end) end
+	if uc and on_field(id) then pcall(function() uc:release_control() end) end
 	B.controlled[id] = nil
 end
 
@@ -167,6 +195,13 @@ local function release_all(reason)
 	local n = 0
 	for id in pairs(B.controlled) do release(id); n = n + 1 end
 	if n > 0 then log("released " .. n .. " units: " .. reason) end
+end
+
+local function forget_all(reason)
+	local n = 0
+	for _ in pairs(B.controlled) do n = n + 1 end
+	B.controlled = {}
+	if n > 0 then log("dropped " .. n .. " controllers without engine calls: " .. reason) end
 end
 
 -- ------------------------------------------------------------------ orders
@@ -227,22 +262,26 @@ local function read_orders()
 end
 B._read_orders = read_orders -- for tools/test_bridge.py
 
+-- Is the server alive? It bumps `beat` in every write (also with no new orders, every few seconds). The game's Lua
+-- numbers are 32-bit floats, so wall-clock times cannot be compared here (os.time() comes out in 128 s steps,
+-- which used to release the army every ~2 minutes): staleness is measured in the bridge's own battle ticks.
+local function server_alive(t)
+	if t and t.battle == B.id and t.beat ~= nil and t.beat ~= B.beat then
+		B.beat, B.beat_tick = t.beat, B.tick
+	end
+	return B.beat_tick ~= nil and (B.tick - B.beat_tick) * TICK_MS / 1000 <= STALE_S
+end
+
 local function apply_orders()
 	local t = read_orders()
-	if not t or t.battle ~= B.id then
-		if next(B.controlled) and B.last_written and os.time() - B.last_written > STALE_S then
-			release_all(string.format("no orders for this battle for %d s (file %s, battle %s)", STALE_S,
-				t and "for another battle" or "unreadable", tostring(t and t.battle)))
-			B.last_written = nil
+	local alive = server_alive(t)
+	if not alive then
+		if next(B.controlled) then
+			release_all(string.format("no word from the server for %d s of battle time", STALE_S))
 		end
 		return
 	end
-	if t.written and os.time() - t.written > STALE_S then
-		release_all(string.format("orders file is stale (server stopped?): os.time=%s written=%s seq=%s",
-			tostring(os.time()), tostring(t.written), tostring(t.seq)))
-		return
-	end
-	B.last_written = t.written
+	if not t or t.battle ~= B.id then return end
 	if type(t.say) == "string" and t.say ~= B.said then
 		B.said = t.say
 		pcall(function() B.battle:show_advisor_message("S2AI " .. t.say, t.say) end)
@@ -280,10 +319,21 @@ end
 -- ------------------------------------------------------------------ engine callbacks
 
 function S2AI_Bridge_Tick()
-	if not B.battle then return end
+	if not B.battle or B.over then return end
 	local ok, err = pcall(function()
 		B.tick = B.tick + 1
+		local known = B.units or {}
 		scan()
+		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
+		-- or the server cannot tell what they are
+		local added = {}
+		for _, id in ipairs(sorted_ids()) do
+			if not known[id] and B.static_sent and not B.static_sent[id] then
+				added[#added + 1] = static_record(id, B.units[id])
+				B.static_sent[id] = true
+			end
+		end
+		if #added > 0 then emit({ type = "units", tick = B.tick, units = added }) end
 		local units = {}
 		for _, id in ipairs(sorted_ids()) do units[#units + 1] = state_record(id, B.units[id]) end
 		emit({ type = "state", tick = B.tick, t = B.tick * TICK_MS / 1000, gt = call(B.battle, "game_time"),
@@ -311,7 +361,9 @@ local function on_event(name)
 		B.phase = PHASE_EVENTS[name]
 		emit({ type = "event", name = name, phase = B.phase, tick = B.tick })
 		if B.phase == "complete" then
-			release_all("battle completed")
+			-- the engine is tearing the battle down: no more engine calls from us (see release())
+			B.over = true
+			forget_all("battle completed")
 			emit({ type = "battle_end", tick = B.tick })
 		end
 	elseif FORWARD_EVENTS[name] then
@@ -325,8 +377,10 @@ local function start()
 	B.battle = empire_battle:new()
 	B.id = os.date("%Y%m%d-%H%M%S")
 	B.stream = RUN .. "/battle-" .. B.id .. ".jsonl"
-	B.tick, B.seq, B.controlled, B.phase, B.said, B.last_written = 0, nil, {}, "deployment", nil, nil
+	B.tick, B.seq, B.controlled, B.phase, B.said = 0, nil, {}, "deployment", nil
+	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n = nil, nil, false, {}, {}, {}
 	scan()
+	for id in pairs(B.units) do B.static_sent[id] = true end
 
 	local armies = {}
 	local alliances = B.battle:alliances()

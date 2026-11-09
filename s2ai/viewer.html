@@ -189,7 +189,7 @@ function render() {
     ctx.fillStyle = u.gen ? col.plan : '#fff'; ctx.fillText(cls.icon, px, py);
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
     ctx.fillStyle = '#cfcabe'; ctx.font = '10px system-ui';
-    ctx.fillText(`${u.id % 100} · ${u.men}`, px + Math.max(w / 2, fs * .7) + 3, py + 3);
+    ctx.fillText(`${u.id % 10000} · ${u.men}`, px + Math.max(w / 2, fs * .7) + 3, py + 3);
   }
 }
 function arrow([ax, ay], [bx, by], colr) {

@@ -49,9 +49,11 @@ local function make_unit(name, x, z)
     } })
 end
 
+MOCK_ARMY_UNITS, MOCK_RELEASES, MOCK_OVER, MOCK_LATE_RELEASES = {}, 0, false, 0
 local function make_army(prefix, n, x0, handicap)
     local units = {}
     for i = 1, n do units[i] = make_unit(prefix .. i, x0, i * 30) end
+    MOCK_ARMY_UNITS[prefix] = units
     return obj({
         units = function() return list(units) end,
         army_handicap = function() return handicap end,
@@ -61,7 +63,11 @@ local function make_army(prefix, n, x0, handicap)
             return obj({
                 add_units = function(_, u) mine[#mine + 1] = u end,
                 take_control = function() each(function(u) u.controlled = true end) end,
-                release_control = function() each(function(u) u.controlled = false; u.target = nil end) end,
+                release_control = function()
+                    MOCK_RELEASES = MOCK_RELEASES + 1
+                    if MOCK_OVER then MOCK_LATE_RELEASES = MOCK_LATE_RELEASES + 1 end  -- this crashed the real game
+                    each(function(u) u.controlled = false; u.target = nil end)
+                end,
                 attack_unit = function(_, t, flag, run)
                     MOCK_CALLS[#MOCK_CALLS + 1] = "attack " .. mine[1].name_ .. "->" .. t.name_
                     each(function(u) u.target = t end)
@@ -90,6 +96,11 @@ function empire_battle:new()
         show_advisor_message = function() end,
     })
 end
+
+-- like the engine: a destroyed unit is removed and the list closes the gap (positions of later units shift)
+function MOCK_KILL(prefix, index) table.remove(MOCK_ARMY_UNITS[prefix], index) end
+-- a reinforcement joins an army mid-battle
+function MOCK_REINFORCE(prefix, name, x, z) table.insert(MOCK_ARMY_UNITS[prefix], make_unit(name, x, z)) end
 
 events = { BattleDeploymentPhaseCommenced = {}, BattleConflictPhaseCommenced = {}, BattleCompleted = {},
            BattleUnitRouts = {}, BattleCommandingUnitRouts = {}, BattleUnitAttacksEnemyUnit = {} }
@@ -129,6 +140,10 @@ def main() -> bool:
             for step in range(1, 81):  # 40 s
                 if step == 4:
                     g.MOCK_FIRE("BattleConflictPhaseCommenced")
+                if step == 30:
+                    g.MOCK_KILL("ai", 1)  # ai1 destroyed: ai2 and ai3 move up in the list
+                if step == 35:
+                    g.MOCK_REINFORCE("player", "player3", -320, 200)
                 g.MOCK_STEP()
                 tick()
                 for msg in link.poll():
@@ -143,8 +158,25 @@ def main() -> bool:
                     decision = commander.decide(link.battle)
                     if decision:
                         link.send(*decision)
+            # ids must still mean the same units after the list was compacted: compare final positions by name
+            by_name = {u.name_: u for u in g.MOCK_UNITS.values()}
+            static = link.battle.static
+            for su in link.battle.state["units"]:
+                mock = by_name.get(static.get(su["id"], {}).get("name"))
+                if mock is None:
+                    problems.append(f"unit id {su['id']} has no static info (reinforcement not announced?)")
+                elif abs(mock.pos.x - su["x"]) > 0.01 or abs(mock.pos.z - su["y"]) > 0.01:
+                    problems.append(f"unit id {su['id']} ({mock.name_}) points at another unit")
+            if "player3" not in {u.get("name") for u in static.values()}:
+                problems.append("the reinforcement player3 never got static info")
+
+            g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")
             link.poll()
+            tick()  # the timer may still fire once after the battle: must not touch the engine
+            if g.MOCK_LATE_RELEASES:
+                problems.append(f"release_control called {g.MOCK_LATE_RELEASES}x after the battle ended "
+                                "(crashed the real game)")
 
             calls = list(g.MOCK_CALLS.values())
             units = list(g.MOCK_UNITS.values())
@@ -161,8 +193,10 @@ def main() -> bool:
                 problems.append("player units were given orders")
             if min(moved) < 30:
                 problems.append("AI units did not advance")
-            if controlled_names:
-                problems.append(f"units still controlled after the battle: {controlled_names}")
+            # at battle end the bridge must NOT call release_control (the engine is tearing units down), only
+            # forget its controllers
+            if len(g.S2AI_BRIDGE.controlled):
+                problems.append(f"bridge still holds controllers after the battle: {list(g.S2AI_BRIDGE.controlled)}")
             if not link.battle.ended:
                 problems.append("battle_end not received")
             log = (real_runtime / "bridge.log").read_text() if (real_runtime / "bridge.log").exists() else ""

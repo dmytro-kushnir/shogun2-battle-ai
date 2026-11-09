@@ -101,7 +101,8 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
         meta["ai"] = guess_ai_alliance(start)
     ai = meta["ai"]
     units = {}
-    for u in start["units"]:
+    static = list(start["units"]) + [u for m in msgs if m["type"] == "units" for u in m.get("units", [])]
+    for u in static:
         t = u.get("type") or "?"
         units[u["id"]] = {"ai": u["alliance"] == ai, "type": t,
                           "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
