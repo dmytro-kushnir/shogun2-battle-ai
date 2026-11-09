@@ -329,6 +329,11 @@ local function start()
 		end
 	end
 	log("bridge started: battle " .. B.id .. ", " .. #units .. " units, stream " .. B.stream)
+	-- let the native module log which script file the engine started for this battle (path format check)
+	pcall(function()
+		local report = package.loadlib(ROOT .. "/native/s2ai_native.dll", "s2ai_report")
+		if report then report() end
+	end)
 	pcall(function() B.battle:show_advisor_message("S2AI bridge active", "S2AI bridge active: battle " .. B.id) end)
 end
 

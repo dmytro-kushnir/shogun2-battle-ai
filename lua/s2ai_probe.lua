@@ -572,6 +572,18 @@ else
 	log("no global 'events' table to hook (type " .. type(events) .. ")")
 end
 
+-- Main menu: load the native module that patches the engine so battles without a script (custom, campaign)
+-- load data/s2ai/custom.battle_script (native/s2ai_native.c; it logs to runtime/native.log). Idempotent.
+if ENV == "frontend" then
+	local ok, f, err = pcall(package.loadlib, ROOT .. "/native/s2ai_native.dll", "luaopen_s2ai_native")
+	if ok and f then
+		local ok2, e2 = pcall(f)
+		log("NATIVE patch module called: " .. tostring(ok2) .. " " .. tostring(e2 or ""))
+	else
+		log("NATIVE module not loaded: " .. tostring(f) .. " " .. tostring(err))
+	end
+end
+
 -- Is package.loadlib real (a native DLL could then patch the engine so custom battles get a script)?
 -- Harmless check: ask kernel32 for a symbol that does not exist. Real loadlib: nil + "...procedure..." + "init";
 -- a disabled stub answers "absent" / "dynamic libraries not enabled".

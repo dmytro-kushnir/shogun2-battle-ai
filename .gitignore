@@ -6,3 +6,7 @@ __pycache__/
 # never commit game files
 *.pack
 data/
+native/*.dll
+native/*.exe
+native/*.pdb
+native/*.lib

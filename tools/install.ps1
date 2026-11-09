@@ -28,7 +28,10 @@ $Targets = @(
 ) +(@('kawanakajima\kawanakajima_battle', 'nagashino\nagashino_battle', 'okehazama\okehazama_battle',
         'sekigahara\sekigahara_battle', 'nagashima\nagashima_battle') | ForEach-Object {
         @{ Path = "shogun_historical_battles\$_.battle_script"; Mode = 'prepend'; Env = 'battle' }
-    })
+    }) + @(
+    # our own script for battles that have none (custom, campaign); native/s2ai_native.dll points the engine at it
+    @{ Path = 's2ai\custom.battle_script'; Mode = 'new'; Env = 'battle' }
+)
 
 if (-not $DataDirs) {
     $libs = @()
@@ -99,11 +102,15 @@ foreach ($d in $DataDirs) {
             Write-Warning "skipped: $target exists and was not written by this tool"
             continue
         }
-        $orig = Join-Path $tmp $t.Path
-        if (-not (Test-Path $orig)) { Write-Warning "$($t.Path) not found in $d\data.pack"; continue }
-        $text = [IO.File]::ReadAllText($orig).TrimEnd()
         $loader = Get-Loader $t.Env
-        $out = if ($t.Mode -eq 'append') { $text + "`n`n" + $loader } else { $loader + "`n`n" + $text }
+        if ($t.Mode -eq 'new') {
+            $out = $loader
+        } else {
+            $orig = Join-Path $tmp $t.Path
+            if (-not (Test-Path $orig)) { Write-Warning "$($t.Path) not found in $d\data.pack"; continue }
+            $text = [IO.File]::ReadAllText($orig).TrimEnd()
+            $out = if ($t.Mode -eq 'append') { $text + "`n`n" + $loader } else { $loader + "`n`n" + $text }
+        }
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         [IO.File]::WriteAllText($target, ($out -replace "`r?`n", "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
         Write-Host "installed $target"
