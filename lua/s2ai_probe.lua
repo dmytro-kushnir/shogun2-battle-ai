@@ -419,8 +419,83 @@ local function describe_context(context)
 	return table.concat(parts, " ")
 end
 
+-- ---------------------------------------------------------------- frontend (main menu) inspection
+-- The custom battle screen (layout sp_battle_setup, interface MPBattleSetup) may be what UIBattleSetup wraps:
+-- RetrieveDetails / SetDetails could let us give custom battles a battle script. Read-only for now.
+
+local function dump(v, depth, seen)
+	depth, seen = depth or 0, seen or {}
+	local t = type(v)
+	if t == "string" then return string.format("%q", v) end
+	if t ~= "table" then return tostring(v) end
+	if seen[v] then return "<cycle>" end
+	if depth >= 5 then return "{...}" end
+	seen[v] = true
+	local keys = {}
+	for k in pairs(v) do keys[#keys + 1] = k end
+	table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+	local parts = {}
+	for _, k in ipairs(keys) do parts[#parts + 1] = tostring(k) .. "=" .. dump(v[k], depth + 1, seen) end
+	return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+local function ui_class(name)
+	if _G[name] ~= nil then return _G[name] end
+	local ok, reg = pcall(debug.getregistry)
+	local c = ok and reg[name]
+	return type(c) == "table" and type(c.__index) == "table" and c.__index.new or nil
+end
+
+local function frontend_inspect(trigger)
+	local root = S.fe_root
+	if not root then return end
+	local UIC, UBS = ui_class("UIComponent"), ui_class("UIBattleSetup")
+	for _, id in ipairs({ "sp_battle_setup", "mp_battle_setup", "panel_battle_setup" }) do
+		local okf, addr = pcall(function() return root:Find(id) end)
+		if okf and addr then
+			local key = trigger .. "/" .. id
+			S.fe_dumps = S.fe_dumps or {}
+			if (S.fe_dumps[id] or 0) >= 6 then return end
+			S.fe_dumps[id] = (S.fe_dumps[id] or 0) + 1
+			local okb, bs = pcall(function() return UBS(addr) end)
+			log(string.format("FRONTEND %s: found %s; UIBattleSetup ctor=%s -> %s %s", key, id, type(UBS),
+				tostring(okb), tostring(bs)))
+			if okb and bs then
+				local okr, details = pcall(function() return bs:RetrieveDetails() end)
+				local text = okr and dump(details) or ("ERROR " .. tostring(details))
+				log("FRONTEND RetrieveDetails(" .. id .. ") type=" .. type(details) .. ": " .. text:sub(1, 20000))
+			end
+			local okc, comp = pcall(function() return UIC(addr) end)
+			if okc and comp then
+				log(string.format("FRONTEND %s component: id=%s visible=%s children=%s", id, tostring(call(comp, "Id")),
+					tostring(call(comp, "Visible")), tostring(call(comp, "ChildCount"))))
+			end
+		end
+	end
+end
+
+local function frontend_event(name, context)
+	if ENV ~= "frontend" then return end
+	if name == "UICreated" then
+		local UIC = ui_class("UIComponent")
+		local ok, root = pcall(function() return UIC(context.component) end)
+		if ok then S.fe_root = root end
+		log("FRONTEND UICreated root=" .. tostring(ok and root))
+	elseif name == "ComponentLClickUp" then
+		local UIC = ui_class("UIComponent")
+		local ok, id = pcall(function() return UIC(context.component):Id() end)
+		log("FRONTEND click: " .. tostring(ok and id or "?"))
+		frontend_inspect("click:" .. tostring(ok and id or "?"))
+	elseif name == "FrontEndScreenChange" then
+		local ok, s = pcall(function() return context.string end) -- a field, as frontend_scripted.lua uses it
+		log("FRONTEND screen: " .. tostring(ok and s))
+		frontend_inspect("screen")
+	end
+end
+
 S.events_seen = S.events_seen or {}
 local function on_event(name, context)
+	frontend_event(name, context)
 	local seen = S.events_seen
 	seen[name] = (seen[name] or 0) + 1
 	-- advice events may carry the battle side's signal: log all of them

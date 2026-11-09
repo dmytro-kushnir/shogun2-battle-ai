@@ -24,7 +24,8 @@ $Marker = '-- shogun2-battle-ai loader'
 
 $Targets = @(
     @{ Path = 'battle_scripted.lua'; Mode = 'append'; Env = 'ui' }
-) + (@('kawanakajima\kawanakajima_battle', 'nagashino\nagashino_battle', 'okehazama\okehazama_battle',
+    @{ Path = 'frontend_scripted.lua'; Mode = 'append'; Env = 'frontend' }
+) +(@('kawanakajima\kawanakajima_battle', 'nagashino\nagashino_battle', 'okehazama\okehazama_battle',
         'sekigahara\sekigahara_battle', 'nagashima\nagashima_battle') | ForEach-Object {
         @{ Path = "shogun_historical_battles\$_.battle_script"; Mode = 'prepend'; Env = 'battle' }
     })
@@ -111,7 +112,7 @@ foreach ($d in $DataDirs) {
         Write-Host "installed $target"
     }
     # the same battle-env files once more, as a pack: loose files did not seem to reach the battle-script state
-    $packArgs = foreach ($t in $Targets | Where-Object { $_.Env -eq 'battle' }) {
+    $packArgs = foreach ($t in $Targets | Where-Object { $_.Env -ne 'ui' }) {
         $loose = Join-Path $d $t.Path
         if (Test-Path $loose) { "$($t.Path)=$loose" }
     }

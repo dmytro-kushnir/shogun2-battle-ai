@@ -19,7 +19,8 @@ END = "-- end of shogun2-battle-ai loader"
 
 ok = True
 for d in DATA_DIRS:
-    for path in list(d.glob("battle_scripted.lua")) + list(d.glob("shogun_historical_battles/*/*.battle_script")):
+    for path in (list(d.glob("battle_scripted.lua")) + list(d.glob("frontend_scripted.lua"))
+                 + list(d.glob("shogun_historical_battles/*/*.battle_script"))):
         text = path.read_text(encoding="utf-8")
         if MARKER not in text:
             continue
