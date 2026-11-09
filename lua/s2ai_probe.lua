@@ -67,7 +67,8 @@ local function json(v)
 	if t == "nil" then return "null"
 	elseif t == "boolean" then return v and "true" or "false"
 	elseif t == "number" then
-		if v ~= v or v == math.huge or v == -math.huge then return "null" end
+		-- no math.huge in the game's Lua (run 7): NaN fails v == v, infinities exceed any real coordinate
+		if v ~= v or v > 1e300 or v < -1e300 then return "null" end
 		if v == math.floor(v) then return string.format("%d", v) end
 		return string.format("%.2f", v)
 	elseif t == "string" then
@@ -386,10 +387,15 @@ local function dump_ui_state()
 		end
 		table.sort(names)
 		log("REGISTRY string keys (" .. #names .. "): " .. table.concat(names, " "))
-		-- in this engine the class metatable IS the method table (run 6: methods showed up as mt.*)
+		-- UI classes keep their methods in __index (run 7); battle.* classes hold them directly
 		for _, cls in ipairs({ "UIBattleSetup", "UIHistoricBattleSetup", "UIComponent", "UIPrefsInterface",
-			"Pointer<EVENT>", "UISelectionManager", "UICardManager" }) do
-			log("CLASS " .. cls .. ": " .. keys_of(reg[cls], 300))
+			"UISelectionManager", "UICardManager", "UIMPInterface", "Pointer<GAME_CORE>", "Pointer<Component>",
+			"battle.ai_unit_controller", "battle.commandevent", "battle.unit_controller" }) do
+			local c = reg[cls]
+			if type(c) == "table" then
+				local methods = type(c.__index) == "table" and c.__index or c
+				log("CLASS " .. cls .. ": " .. keys_of(methods, 400))
+			end
 		end
 	end
 end
