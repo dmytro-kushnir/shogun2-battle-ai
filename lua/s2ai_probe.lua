@@ -18,10 +18,15 @@ local TICK_MS = 1000
 local CONTROL_TEST_DELAY_S = 15  -- after deployment ends
 local CONTROL_TEST_LENGTH_S = 30 -- then the unit is handed back to the game's AI
 
+-- Which Lua environment loaded us (set by the loader, tools/install.ps1):
+--   "ui"     - data/battle_scripted.lua: the UI/event scripting state, loaded for every battle, no battle API
+--   "battle" - a historical battle's .battle_script: the battle-script state with empire_battle
+local ENV = S2AI_ENV or "?"
+
 local function log(msg)
 	local f = io.open(LOG_PATH, "a")
 	if f then
-		f:write(os.date("%Y-%m-%d %H:%M:%S"), "  ", tostring(msg), "\n")
+		f:write(os.date("%Y-%m-%d %H:%M:%S"), " [", ENV, "] ", tostring(msg), "\n")
 		f:close()
 	end
 end
@@ -168,7 +173,13 @@ end
 -- Takes the first unit of alliance 2 away from the game's AI, sends it 60 m sideways, and gives it back
 -- after CONTROL_TEST_LENGTH_S. Whoever's unit that is (yours or the AI's), you will see it walk off.
 
+local NO_PHASE_FALLBACK_S = 60 -- a historical battle's own script may replace our phase handler
+
 local function control_test(now)
+	if not S.deployed_at and S.phase == "?" and now >= NO_PHASE_FALLBACK_S then
+		S.deployed_at = now - CONTROL_TEST_DELAY_S
+		log("no phase events seen; starting the control test anyway at " .. now .. " s")
+	end
 	if not S.deployed_at then return end
 	local t = S.test
 	if not t and now - S.deployed_at >= CONTROL_TEST_DELAY_S then
@@ -279,13 +290,76 @@ local function reset(reason)
 	S.battle, S.ticks, S.phase, S.deployed_at, S.test, S.api_dumped, S.tick_error_logged = nil, 0, "?", nil, nil, nil, nil
 end
 
+-- ---------------------------------------------------------------- UI-state introspection
+-- Looking for a way from the UI state (which every battle has) to the battle: tables of engine functions,
+-- the Lua registry, and what the event contexts expose.
+
+local function keys_of(t, limit)
+	if type(t) ~= "table" then return "(" .. type(t) .. ")" end
+	local names = {}
+	for k, v in pairs(t) do names[#names + 1] = tostring(k) .. ":" .. type(v) end
+	table.sort(names)
+	local n = #names
+	if limit and n > limit then
+		for i = limit + 1, n do names[i] = nil end
+		names[#names + 1] = "...(" .. n .. " total)"
+	end
+	return table.concat(names, " ")
+end
+
+local function dump_ui_state()
+	for _, name in ipairs({ "system", "vfs", "lookup", "udata_lookup", "defined", "bit" }) do
+		log("TABLE " .. name .. ": " .. keys_of(_G[name], 200))
+	end
+	log("package.loaded: " .. keys_of(package.loaded, 200))
+	log("CliExecute=" .. type(CliExecute))
+	local ok, reg = pcall(debug.getregistry)
+	if ok then
+		local names = {}
+		for k, v in pairs(reg) do
+			if type(k) == "string" then names[#names + 1] = k .. ":" .. type(v) end
+		end
+		table.sort(names)
+		log("REGISTRY string keys (" .. #names .. "): " .. table.concat(names, " "))
+	end
+end
+
+-- method names tried on event contexts; their __index is a C function, so they cannot be listed
+local CONTEXT_PROBES = { "string", "number", "boolean", "table", "unit", "character", "faction", "component",
+	"building", "army", "alliance", "battle", "position", "get_name", "type", "id", "key", "name", "unit_key",
+	"get_unit", "get_army", "get_alliance", "garrison_residence", "region", "settlement", "ship", "target" }
+
+local function describe_context(context)
+	if context == nil then return "nil" end
+	local parts = { "tostring=" .. tostring(context) }
+	local mt = getmetatable(context)
+	if type(mt) == "table" and type(mt.type) == "function" then
+		local ok, v = pcall(mt.type, context)
+		parts[#parts + 1] = "mt.type()=" .. tostring(v)
+	end
+	local found = {}
+	for _, m in ipairs(CONTEXT_PROBES) do
+		local ok, v = pcall(function() return context[m] end)
+		if ok and v ~= nil then
+			local val = ""
+			if type(v) == "function" then
+				local ok2, r = pcall(v, context)
+				val = "=" .. (ok2 and (type(r) .. ":" .. tostring(r)) or "err")
+			end
+			found[#found + 1] = m .. val
+		end
+	end
+	parts[#parts + 1] = "has[" .. table.concat(found, " ") .. "]"
+	return table.concat(parts, " ")
+end
+
 S.events_seen = S.events_seen or {}
 local function on_event(name, context)
 	local seen = S.events_seen
 	seen[name] = (seen[name] or 0) + 1
 	if seen[name] <= 2 then
-		log(string.format("event %s #%d empire_battle=%s context=[%s]", name, seen[name], type(empire_battle),
-			context ~= nil and method_names(context) or "nil"))
+		log(string.format("event %s #%d empire_battle=%s %s", name, seen[name], type(empire_battle),
+			describe_context(context)))
 	end
 	if (S.start_failed or 0) < 3 then try_start("event " .. name) end
 	if name == "BattleConflictPhaseCommenced" and S.battle and not S.deployed_at then
@@ -311,6 +385,11 @@ if type(events) == "table" then
 	log("hooked " .. n .. " game events")
 else
 	log("no global 'events' table to hook (type " .. type(events) .. ")")
+end
+
+if ENV == "ui" then
+	local ok, err = pcall(dump_ui_state)
+	if not ok then log("UI DUMP ERROR: " .. tostring(err)) end
 end
 
 try_start("load")
