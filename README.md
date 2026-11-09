@@ -18,9 +18,10 @@ plain Complete Edition.
 |---|---|
 | Custom battles (land) | ✅ played against the general |
 | Historical battles from the menu (Kawanakajima, Nagashino, Okehazama, Sekigahara, Nagashima) | ✅ |
-| Campaign battles | ⚠️ expected to work like custom battles, not tested yet |
-| Sieges, naval battles, Fall of the Samurai specifics | ❓ not tested |
-| Terrain (hills, forests, rivers) | ❌ the general does not see it yet |
+| Campaign battles, including reinforcements arriving mid-battle | ✅ |
+| Sieges | ⚠️ the general fights them, but does not see walls, gates and towers yet (in progress) |
+| Naval battles | ❓ not tested |
+| Terrain (hills, forests, rivers) | ❌ the general does not see it yet (unit altitude is recorded) |
 | Live map and replays in the browser, also from other devices on your network | ✅ |
 
 ## Requirements

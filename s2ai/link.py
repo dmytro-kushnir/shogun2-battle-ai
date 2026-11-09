@@ -48,6 +48,7 @@ class Battle:
     ended: bool = False
     events: list = field(default_factory=list)
     applied: list = field(default_factory=list)
+    buildings: dict | None = None
 
     @property
     def static(self) -> dict[int, dict]:
@@ -124,6 +125,8 @@ class GameLink:
             self.battle.phase = msg.get("phase", self.battle.phase)
         elif kind == "applied":
             self.battle.applied.append(msg)
+        elif kind == "buildings":  # walls, gates, towers: what the bridge could read (discovery stage)
+            self.battle.buildings = msg.get("data")
         elif kind == "units":  # units that joined after the start (reinforcements): their static info
             have = {u["id"] for u in self.battle.start["units"]}
             self.battle.start["units"].extend(u for u in msg.get("units", []) if u["id"] not in have)

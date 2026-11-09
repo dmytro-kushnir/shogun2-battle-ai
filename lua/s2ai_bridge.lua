@@ -145,7 +145,7 @@ local function state_record(id, e)
 	local p = call(u, "position")
 	return {
 		id = id,
-		x = p and call(p, "get_x"), y = p and call(p, "get_z"),
+		x = p and call(p, "get_x"), y = p and call(p, "get_z"), z = p and call(p, "get_y"), -- z = altitude
 		h = call(u, "bearing"),
 		w = call(u, "ordered_width"),
 		men = call(u, "number_of_men_alive"),
@@ -153,6 +153,7 @@ local function state_record(id, e)
 		mov = call(u, "is_moving"), run = call(u, "is_moving_fast"),
 		ammo = call(u, "ammo_left"),
 		gone = call(u, "is_leaving_battle"),
+		gar = call(u, "is_currently_garrisoned"),
 		ab = call(u, "current_special_ability"), ab_ok = call(u, "can_perform_special_ability"),
 		ctl = B.controlled[id] ~= nil,
 	}
@@ -371,6 +372,71 @@ local function on_event(name)
 	end
 end
 
+-- ------------------------------------------------------------------ buildings (siege discovery)
+-- What do building objects offer? Dump the method names of the battle's building classes (no calls), then call
+-- only getter-looking methods on each building and stream what came back ("buildings" message). Mutators such as
+-- destroy / hide / change_on_fire are never called.
+
+local SAFE_GETTER = {
+	position = true, health = true, capacity = true, currently_garrisoned = true, is_garrisoned = true,
+	alliance_owner_id = true, name = true, type = true, key = true, bearing = true, garrisonable_count = true,
+	is_destroyed = true, is_gate = true, is_wall = true, is_tower = true, is_open = true, owner = true,
+	unique_ui_id = true, health_percent = true, max_health = true, width = true, length = true, height = true,
+}
+
+local function methods_of(obj)
+	local names = {}
+	local mt = getmetatable(obj)
+	local idx = type(mt) == "table" and (type(mt.__index) == "table" and mt.__index or mt) or nil
+	if idx then for k in pairs(idx) do if type(k) == "string" and not k:find("^__") then names[#names + 1] = k end end end
+	table.sort(names)
+	return names
+end
+
+local function describe_value(v)
+	if type(v) == "userdata" or type(v) == "table" then
+		local x, y, z = call(v, "get_x"), call(v, "get_z"), call(v, "get_y")
+		if x then return { x = x, y = y, z = z } end
+		return tostring(v)
+	end
+	return v
+end
+
+local function discover_buildings()
+	local out = { classes = {} }
+	local okr, reg = pcall(debug.getregistry)
+	if okr then
+		for _, cls in ipairs({ "battle.building", "battle.buildings", "battle_location", "battle_marker",
+			"battle.camera", "battle.weather" }) do
+			local c = reg[cls]
+			if type(c) == "table" then
+				local names = {}
+				for k in pairs(type(c.__index) == "table" and c.__index or c) do
+					if type(k) == "string" and not k:find("^__") then names[#names + 1] = k end
+				end
+				table.sort(names)
+				out.classes[cls] = names
+			end
+		end
+	end
+	local list = call(B.battle, "buildings")
+	out.list_methods = list and methods_of(list) or nil
+	local n = list and call(list, "count") or nil
+	out.count = n
+	out.items = {}
+	for i = 1, math.min(n or 0, 200) do
+		local b = call(list, "item", i)
+		if b then
+			local rec = { i = i, methods = (i == 1) and methods_of(b) or nil }
+			for _, m in ipairs(methods_of(b)) do
+				if SAFE_GETTER[m] then rec[m] = describe_value(call(b, m)) end
+			end
+			out.items[#out.items + 1] = rec
+		end
+	end
+	return out
+end
+
 -- ------------------------------------------------------------------ start
 
 local function start()
@@ -395,6 +461,8 @@ local function start()
 	local units = {}
 	for _, id in ipairs(sorted_ids()) do units[#units + 1] = static_record(id, B.units[id]) end
 	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units })
+	local okb, buildings = pcall(discover_buildings)
+	emit({ type = "buildings", ok = okb, data = okb and buildings or tostring(buildings) })
 	pcall(function()
 		local f = io.open(RUN .. "/current_battle.txt", "w")
 		f:write(B.id)
