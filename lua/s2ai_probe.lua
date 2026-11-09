@@ -176,8 +176,10 @@ local function dump_api_once()
 end
 
 -- ---------------------------------------------------------------- control test
--- Takes the first unit of alliance 2 away from the game's AI, sends it 60 m sideways, and gives it back
--- after CONTROL_TEST_LENGTH_S. Whoever's unit that is (yours or the AI's), you will see it walk off.
+-- Takes a WHOLE army away from the game's AI, sends every unit 60 m east, and gives them back after
+-- CONTROL_TEST_LENGTH_S - easy to see in game. Alliance 1 army 1 is Ishida Mitsunari's army at Sekigahara
+-- (the player commands Tokugawa, alliance 2).
+local CONTROL_TEST_ALLIANCE = 1
 
 local NO_PHASE_FALLBACK_S = 60 -- a historical battle's own script may replace our phase handler
 
@@ -190,24 +192,44 @@ local function control_test(now)
 	local t = S.test
 	if not t and now - S.deployed_at >= CONTROL_TEST_DELAY_S then
 		local alliances = S.battle:alliances()
-		if alliances:count() < 2 then return end
-		local army = alliances:item(2):armies():item(1)
-		local unit = army:units():item(1)
+		if alliances:count() < CONTROL_TEST_ALLIANCE then return end
+		local army = alliances:item(CONTROL_TEST_ALLIANCE):armies():item(1)
+		local units = army:units()
 		local uc = army:create_unit_controller()
 		log("API unitcontroller: " .. method_names(uc))
-		local p = unit:position()
-		local x, z = p:get_x(), p:get_z()
-		local ok1, e1 = pcall(function() uc:add_units(unit) end)
+		local added, errors = 0, {}
+		for i = 1, units:count() do
+			local ok, e = pcall(function() uc:add_units(units:item(i)) end)
+			if ok then added = added + 1 else errors[#errors + 1] = tostring(e) end
+		end
 		local ok2, e2 = pcall(function() uc:take_control() end)
-		local ok3, e3 = pcall(function() uc:goto_location(vec(x + 60, z)) end)
-		log(string.format("CONTROL TEST start: unit 2.1.1 at (%.1f, %.1f) -> (%.1f, %.1f); add_units=%s %s take_control=%s %s goto_location=%s %s",
-			x, z, x + 60, z, tostring(ok1), tostring(e1 or ""), tostring(ok2), tostring(e2 or ""), tostring(ok3), tostring(e3 or "")))
-		S.test = { uc = uc, unit = unit, started = now, x0 = x, z0 = z }
+		-- one goto per unit: each to its own spot 60 m east, so the army keeps its shape
+		local sent = 0
+		for i = 1, units:count() do
+			local u = units:item(i)
+			local one = army:create_unit_controller()
+			local ok = pcall(function()
+				local p = u:position()
+				one:add_units(u)
+				one:take_control()
+				one:goto_location(vec(p:get_x() + 60, p:get_z()))
+			end)
+			if ok then sent = sent + 1 end
+			S.test_ucs = S.test_ucs or {}
+			S.test_ucs[#S.test_ucs + 1] = one
+		end
+		local unit = units:item(1)
+		local p = unit:position()
+		log(string.format("CONTROL TEST start: alliance %d army 1 (%d units): add_units ok %d %s; take_control=%s %s; goto sent to %d units",
+			CONTROL_TEST_ALLIANCE, units:count(), added, table.concat(errors, "; "), tostring(ok2), tostring(e2 or ""), sent))
+		S.test = { uc = uc, unit = unit, started = now, x0 = p:get_x(), z0 = p:get_z() }
 	elseif t and not t.done then
 		local p = t.unit:position()
 		local moved = math.sqrt((p:get_x() - t.x0) ^ 2 + (p:get_z() - t.z0) ^ 2)
 		if now - t.started >= CONTROL_TEST_LENGTH_S then
 			local ok = pcall(function() t.uc:release_control() end)
+			for _, one in ipairs(S.test_ucs or {}) do pcall(function() one:release_control() end) end
+			S.test_ucs = nil
 			log(string.format("CONTROL TEST end: unit moved %.1f m; release_control=%s", moved, tostring(ok)))
 			t.done = true
 		elseif math.floor(now - t.started) % 5 == 0 then
