@@ -572,6 +572,15 @@ else
 	log("no global 'events' table to hook (type " .. type(events) .. ")")
 end
 
+-- Is package.loadlib real (a native DLL could then patch the engine so custom battles get a script)?
+-- Harmless check: ask kernel32 for a symbol that does not exist. Real loadlib: nil + "...procedure..." + "init";
+-- a disabled stub answers "absent" / "dynamic libraries not enabled".
+do
+	local ok, f, err, where = pcall(package.loadlib, "kernel32.dll", "s2ai_no_such_symbol")
+	log(string.format("LOADLIB check: pcall=%s f=%s err=%s where=%s", tostring(ok), tostring(f), tostring(err),
+		tostring(where)))
+end
+
 do -- both states: the battle-script state's registry may hold more classes
 	local ok, err = pcall(dump_ui_state)
 	if not ok then log("STATE DUMP ERROR: " .. tostring(err)) end
