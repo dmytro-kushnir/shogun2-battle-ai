@@ -23,12 +23,16 @@ local CONTROL_TEST_LENGTH_S = 30 -- then the unit is handed back to the game's A
 --   "battle" - a historical battle's .battle_script: the battle-script state with empire_battle
 local ENV = S2AI_ENV or "?"
 
+-- Logging must never be what breaks: the battle-script state may lack io/os, and then the probe still runs
+-- (the control test moving a unit is visible in game even without a log).
 local function log(msg)
-	local f = io.open(LOG_PATH, "a")
-	if f then
-		f:write(os.date("%Y-%m-%d %H:%M:%S"), " [", ENV, "] ", tostring(msg), "\n")
-		f:close()
-	end
+	pcall(function()
+		local f = io.open(LOG_PATH, "a")
+		if f then
+			f:write(os.date("%Y-%m-%d %H:%M:%S"), " [", ENV, "] ", tostring(msg), "\n")
+			f:close()
+		end
+	end)
 end
 
 -- ---------------------------------------------------------------- helpers
@@ -130,11 +134,13 @@ end
 local function write_snapshot()
 	local units = {}
 	each_unit(function(a, r, u, unit) units[#units + 1] = unit_record(a, r, u, unit) end)
-	local f = io.open(STATE_PATH, "a")
-	if f then
-		f:write(json({ t = S.ticks, clock = os.clock(), phase = S.phase, units = units }), "\n")
-		f:close()
-	end
+	pcall(function()
+		local f = io.open(STATE_PATH, "a")
+		if f then
+			f:write(json({ t = S.ticks, clock = os.clock(), phase = S.phase, units = units }), "\n")
+			f:close()
+		end
+	end)
 end
 
 local function dump_api_once()
@@ -251,13 +257,13 @@ log(string.format("_VERSION=%s io=%s os=%s dofile=%s loadlib=%s empire_battle=%s
 	tostring(_VERSION), type(io), type(os), type(dofile), type(package and package.loadlib),
 	type(empire_battle), type(battle_vector)))
 
-do
+pcall(function()
 	-- file read-back check (needed later for reading orders)
 	local f = io.open(LOG_PATH, "r")
 	local size = f and f:seek("end")
 	if f then f:close() end
 	log("read-back of probe.log: " .. tostring(size) .. " bytes")
-end
+end)
 
 do
 	-- what does this Lua state contain at load time?
