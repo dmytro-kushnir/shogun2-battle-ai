@@ -2,7 +2,8 @@
 that drops anything that cannot be carried out (unknown units, enemy units in our groups, ...)."""
 from __future__ import annotations
 
-TASKS = ["attack", "move", "hold", "withdraw"]
+TASKS = ["attack", "move", "hold", "withdraw", "garrison", "climb", "attack_building", "occupy"]
+BUILDING_TASKS = {"garrison", "climb", "attack_building"}
 
 PLAN_SCHEMA = {
     "type": "object",
@@ -16,7 +17,7 @@ PLAN_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["name", "units", "task", "target", "position", "facing", "run",
+                "required": ["name", "units", "task", "target", "building", "position", "facing", "run",
                              "engage_within_m", "keep_range_m"],
                 "properties": {
                     "name": {"type": "string", "description": "e.g. 'left wing cavalry'"},
@@ -24,8 +25,15 @@ PLAN_SCHEMA = {
                     "task": {"type": "string", "enum": TASKS,
                              "description": "attack: charge `target`; move: go to `position` and stand there in a "
                                             "line; hold: stand in a line at `position` (or where they are if null); "
-                                            "withdraw: leave the battlefield"},
+                                            "withdraw: leave the battlefield. Sieges: garrison: man `building` "
+                                            "(a wall section, tower or gate: missile units shoot from it); climb: "
+                                            "scale the wall section `building` (attackers); attack_building: "
+                                            "attack `building` (e.g. a gate); occupy: take and hold the point "
+                                            "`position` (e.g. the keep's courtyard)"},
                     "target": {"type": ["integer", "null"], "description": "attack: id of an ENEMY unit"},
+                    "building": {"type": ["integer", "null"],
+                                 "description": "garrison/climb/attack_building: id of a building from "
+                                                "FORTIFICATIONS (the number after 'b')"},
                     "position": {"type": ["array", "null"], "items": {"type": "number"}, "minItems": 2,
                                  "maxItems": 2, "description": "move/hold: [x, y] where the group's centre goes"},
                     "facing": {"type": ["number", "null"],
@@ -45,7 +53,8 @@ PLAN_SCHEMA = {
 }
 
 
-def validate(plan: dict, ours: set[int], enemies: set[int]) -> tuple[dict, list[str]]:
+def validate(plan: dict, ours: set[int], enemies: set[int],
+             buildings: set[int] | None = None) -> tuple[dict, list[str]]:
     """Keep what can be carried out; return (clean plan, problems)."""
     problems: list[str] = []
     groups = []
@@ -75,15 +84,23 @@ def validate(plan: dict, ours: set[int], enemies: set[int]) -> tuple[dict, list[
             task = "hold"
         if task != "attack":
             target = None
+        building = _int(g.get("building"))
+        if task in BUILDING_TASKS and building not in (buildings or set()):
+            problems.append(f"group '{g.get('name')}': {task} needs a building id from FORTIFICATIONS, "
+                            f"got {g.get('building')}; holding")
+            task = "hold"
+        if task not in BUILDING_TASKS:
+            building = None
         pos = g.get("position")
         pos = [_num(pos[0]), _num(pos[1])] if isinstance(pos, list) and len(pos) == 2 else None
         if pos is not None and None in pos:
             pos = None
-        if task == "move" and pos is None:
-            problems.append(f"group '{g.get('name')}': move without a position; holding")
+        if task in ("move", "occupy") and pos is None:
+            problems.append(f"group '{g.get('name')}': {task} without a position; holding")
             task = "hold"
         groups.append({
             "name": str(g.get("name") or "group")[:60], "units": units, "task": task, "target": target,
+            "building": building,
             "position": pos, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
             "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
             "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),

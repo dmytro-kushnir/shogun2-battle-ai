@@ -108,15 +108,22 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
                           "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
                           "missile": (u.get("range") or 0) > 0 and (u.get("ammo0") or 0) > 0,
                           "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0")}
-    frames, events, last_t = [], [], -1.0
+    from .server import map_buildings
+    bmsg = next((m for m in msgs if m["type"] == "buildings" and "buildings" in m), None)
+    buildings = map_buildings({b["id"]: b for b in bmsg["buildings"]}, ai) if bmsg else []
+    frames, events, bstates, last_t = [], [], [], -1.0
     for m in msgs:
+        if m["type"] == "state" and m.get("buildings"):
+            bstates.append({"t": m["t"], "b": m["buildings"]})  # [id, health, owner, garrisoned] every 2 s
         if m["type"] == "state":
             if m["t"] - last_t < 0.99:  # one frame per second is plenty for a replay
                 continue
             last_t = m["t"]
             frames.append({"t": m["t"], "phase": m.get("phase"), "u": [
                 [u["id"], round(u["x"], 1), round(u["y"], 1), round(u.get("h") or 0), round(u.get("w") or 0, 1),
-                 u.get("men") or 0, (1 if u.get("rout") or u.get("shat") else 0) | (2 if u.get("ctl") else 0)]
+                 u.get("men") or 0,
+                 (1 if u.get("rout") or u.get("shat") else 0) | (2 if u.get("ctl") else 0) | (4 if u.get("gar") else 0),
+                 round(u.get("z") or 0)]
                 for u in m["units"] if u.get("x") is not None and not u.get("gone")]})
         elif m["type"] == "event" and m.get("name") != "BattleUnitAttacksEnemyUnit":
             events.append({"t": m.get("tick", 0) * 0.5, "name": m.get("name")})
@@ -125,7 +132,8 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
              for p in _read_jsonl(runtime / f"plans-{bid}.jsonl")]
     orders = _read_jsonl(runtime / f"orders-{bid}.jsonl")
     return json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
-                       "plans": plans, "orders": orders, "general": meta.get("general")}).encode()
+                       "plans": plans, "orders": orders, "general": meta.get("general"),
+                       "buildings": buildings, "bstates": bstates}).encode()
 
 
 # ---------------------------------------------------------------- http

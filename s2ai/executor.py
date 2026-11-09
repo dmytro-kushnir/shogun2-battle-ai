@@ -97,9 +97,11 @@ class Executor:
         g = self._group_of(u.id)
         near = min(enemies, key=lambda e: dist(u, e)) if enemies else None
         d = dist(u, near) if near else 1e9
+        # units manning or scaling a wall stay on it: no reflexes pull them off
+        reflexes = g is not None and g["task"] not in ("garrison", "climb")
 
         # reflex: missile units step back from melee threats
-        if g and g["keep_range_m"] > 0 and u.missile and near and not near.missile and d < g["keep_range_m"]:
+        if reflexes and g["keep_range_m"] > 0 and u.missile and near and not near.missile and d < g["keep_range_m"]:
             away = bearing(near.x, near.y, u.x, u.y)
             step = g["keep_range_m"] - d + 25
             x = u.x + math.sin(math.radians(away)) * step
@@ -108,7 +110,7 @@ class Executor:
                     "_sig": f"evade:{near.id}:{round(x / 20)}:{round(y / 20)}"}
 
         # reflex: engage what comes close (and stay on it until it breaks)
-        if g and g["engage_within_m"] > 0:
+        if reflexes and g["engage_within_m"] > 0:
             cur = by_id.get(self.engaged.get(u.id, -1))
             if cur is not None and cur.fighting_fit and dist(u, cur) < g["engage_within_m"] * 2:
                 return {"cmd": "attack", "unit": u.id, "target": cur.id, "run": True, "_sig": f"attack:{cur.id}"}
@@ -131,6 +133,15 @@ class Executor:
                     "_sig": f"attack:{target.id}"}
         if task == "withdraw":
             return {"cmd": "withdraw", "unit": u.id, "run": True, "_sig": "withdraw"}
+        if task in ("garrison", "climb", "attack_building"):
+            if task == "garrison" and u.garrisoned:
+                return None  # in place
+            return {"cmd": task, "unit": u.id, "building": g["building"], "run": True,
+                    "_sig": f"{task}:{g['building']}"}
+        if task == "occupy":
+            x, y = g["position"]
+            return {"cmd": "occupy", "unit": u.id, "x": x, "y": y, "run": g["run"],
+                    "_sig": f"occupy:{round(x / 5)}:{round(y / 5)}"}
         slot = self.slots.get(u.id)
         if slot is None:
             return None

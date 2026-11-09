@@ -83,6 +83,9 @@ local function vec(x, y)
 	return p
 end
 
+-- defined in the buildings section further down, used by the tick function before it
+local scan_buildings, building_states
+
 -- ------------------------------------------------------------------ units
 
 -- Stable unit ids. The engine compacts an army's unit list when a unit is destroyed, so a list position does not
@@ -231,6 +234,12 @@ local HANDLERS = {
 	melee = function(uc, o) uc:melee(o.on ~= false) end,
 	formation = function(uc, o) uc:change_formation(o.formation) end,
 	ability = function(uc, o) uc:perform_special_ability(o.ability) end,
+	-- sieges (argument conventions as in the game's own battle scripts)
+	garrison = function(uc, o) uc:defend_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), o.run ~= false) end,
+	climb = function(uc, o) uc:climb_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
+	attack_building = function(uc, o) uc:attack_building(B.buildings[o.building] or error("no building " .. tostring(o.building))) end,
+	occupy = function(uc, o) uc:occupy_zone(vec(o.x, o.y), o.run ~= false) end,
+	leave_building = function(uc) uc:leave_building() end,
 	shot_type = function(uc, o) uc:change_shot_type(o.shot) end,
 	withdraw = function(uc, o) uc:withdraw(o.run ~= false) end,
 }
@@ -337,8 +346,10 @@ function S2AI_Bridge_Tick()
 		if #added > 0 then emit({ type = "units", tick = B.tick, units = added }) end
 		local units = {}
 		for _, id in ipairs(sorted_ids()) do units[#units + 1] = state_record(id, B.units[id]) end
+		local bstate = nil
+		if B.forts and #B.forts > 0 and B.tick % 4 == 1 then bstate = building_states() end -- every 2 s
 		emit({ type = "state", tick = B.tick, t = B.tick * TICK_MS / 1000, gt = call(B.battle, "game_time"),
-			phase = B.phase, units = units })
+			phase = B.phase, units = units, buildings = bstate })
 		apply_orders()
 	end)
 	if not ok then
@@ -372,67 +383,53 @@ local function on_event(name)
 	end
 end
 
--- ------------------------------------------------------------------ buildings (siege discovery)
--- What do building objects offer? Dump the method names of the battle's building classes (no calls), then call
--- only getter-looking methods on each building and stream what came back ("buildings" message). Mutators such as
--- destroy / hide / change_on_fire are never called.
+-- ------------------------------------------------------------------ buildings (sieges)
+-- battle:buildings() lists every building on the map: fortifications (walls, gates, towers, keep), houses,
+-- scenery. Building methods (run 13): name, position, central_position, health, capacity (garrison size),
+-- alliance_owner_id (0-based alliance, -1 = nobody), is_garrisoned, currently_garrisoned, plus mutators
+-- (destroy, hide, change_on_fire, ...) that are never called. A building's id is its list index.
 
-local SAFE_GETTER = {
-	position = true, health = true, capacity = true, currently_garrisoned = true, is_garrisoned = true,
-	alliance_owner_id = true, name = true, type = true, key = true, bearing = true, garrisonable_count = true,
-	is_destroyed = true, is_gate = true, is_wall = true, is_tower = true, is_open = true, owner = true,
-	unique_ui_id = true, health_percent = true, max_health = true, width = true, length = true, height = true,
-}
+local FORT_NAME = { "castle", "fort", "wall", "gate", "tower", "keep", "corner", "palisade", "stockade", "bastion",
+	"turret", "barbican", "yagura" }
 
-local function methods_of(obj)
-	local names = {}
-	local mt = getmetatable(obj)
-	local idx = type(mt) == "table" and (type(mt.__index) == "table" and mt.__index or mt) or nil
-	if idx then for k in pairs(idx) do if type(k) == "string" and not k:find("^__") then names[#names + 1] = k end end end
-	table.sort(names)
-	return names
+local function is_military(name, cap, owner)
+	if (cap or 0) > 0 or (owner or -1) >= 0 then return true end
+	name = tostring(name):lower()
+	for _, w in ipairs(FORT_NAME) do if name:find(w, 1, true) then return true end end
+	return false
 end
 
-local function describe_value(v)
-	if type(v) == "userdata" or type(v) == "table" then
-		local x, y, z = call(v, "get_x"), call(v, "get_z"), call(v, "get_y")
-		if x then return { x = x, y = y, z = z } end
-		return tostring(v)
-	end
-	return v
+local function owner_alliance(b)
+	local o = call(b, "alliance_owner_id")
+	return (o and o >= 0) and (o + 1) or 0 -- 1-based like units' alliances; 0 = nobody
 end
 
-local function discover_buildings()
-	local out = { classes = {} }
-	local okr, reg = pcall(debug.getregistry)
-	if okr then
-		for _, cls in ipairs({ "battle.building", "battle.buildings", "battle_location", "battle_marker",
-			"battle.camera", "battle.weather" }) do
-			local c = reg[cls]
-			if type(c) == "table" then
-				local names = {}
-				for k in pairs(type(c.__index) == "table" and c.__index or c) do
-					if type(k) == "string" and not k:find("^__") then names[#names + 1] = k end
-				end
-				table.sort(names)
-				out.classes[cls] = names
-			end
-		end
-	end
+function scan_buildings() -- assigns the local declared at the top
+	B.buildings, B.forts = {}, {}
 	local list = call(B.battle, "buildings")
-	out.list_methods = list and methods_of(list) or nil
-	local n = list and call(list, "count") or nil
-	out.count = n
-	out.items = {}
-	for i = 1, math.min(n or 0, 200) do
+	local n = list and call(list, "count") or 0
+	local out = {}
+	for i = 1, math.min(n, 2000) do
 		local b = call(list, "item", i)
 		if b then
-			local rec = { i = i, methods = (i == 1) and methods_of(b) or nil }
-			for _, m in ipairs(methods_of(b)) do
-				if SAFE_GETTER[m] then rec[m] = describe_value(call(b, m)) end
-			end
-			out.items[#out.items + 1] = rec
+			local p = call(b, "position")
+			local name, cap, owner = call(b, "name"), call(b, "capacity"), owner_alliance(b)
+			local mil = is_military(name, cap, owner - 1)
+			B.buildings[i] = b
+			if mil then B.forts[#B.forts + 1] = i end
+			out[#out + 1] = { id = i, name = name, x = p and call(p, "get_x"), y = p and call(p, "get_z"),
+				z = p and call(p, "get_y"), cap = cap, owner = owner, hp = call(b, "health"), mil = mil }
 		end
+	end
+	return out
+end
+
+-- changing state of the fortifications only (a few dozen buildings): [id, health, owner, garrisoned]
+function building_states() -- assigns the local declared at the top
+	local out = {}
+	for _, i in ipairs(B.forts or {}) do
+		local b = B.buildings[i]
+		out[#out + 1] = { i, call(b, "health"), owner_alliance(b), call(b, "currently_garrisoned") and 1 or 0 }
 	end
 	return out
 end
@@ -461,8 +458,13 @@ local function start()
 	local units = {}
 	for _, id in ipairs(sorted_ids()) do units[#units + 1] = static_record(id, B.units[id]) end
 	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units })
-	local okb, buildings = pcall(discover_buildings)
-	emit({ type = "buildings", ok = okb, data = okb and buildings or tostring(buildings) })
+	local okb, buildings = pcall(scan_buildings)
+	if okb then
+		emit({ type = "buildings", buildings = buildings })
+	else
+		log("BUILDINGS ERROR: " .. tostring(buildings))
+		B.buildings, B.forts = {}, {}
+	end
 	pcall(function()
 		local f = io.open(RUN .. "/current_battle.txt", "w")
 		f:write(B.id)

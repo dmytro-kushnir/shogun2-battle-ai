@@ -75,6 +75,9 @@ local function make_army(prefix, n, x0, handicap)
                 goto_location = function(_, p) each(function(u) u.dest = p end) end,
                 goto_location_angle_width = function(_, p) each(function(u) u.dest = p end) end,
                 halt = function() each(function(u) u.dest = nil; u.target = nil end) end,
+                defend_building = function(_, b, run)
+                    MOCK_CALLS[#MOCK_CALLS + 1] = "garrison " .. mine[1].name_ .. "->" .. b.name_
+                end,
             })
         end,
     })
@@ -86,10 +89,25 @@ local alliances = list({
     obj({ armies = function() return list({ ai_army }) end }),
 })
 
+-- two fortification pieces and a house, as battle:buildings() lists them
+local function make_building(name, x, z, cap, owner)
+    local b = { name_ = name, pos = battle_vector:new() }
+    b.pos:set(x, 120, z)
+    return setmetatable(b, { __index = {
+        name = function(s) return s.name_ end, position = function(s) return s.pos end,
+        capacity = function() return cap end, alliance_owner_id = function() return owner end,
+        health = function() return 1 end, currently_garrisoned = function() return false end,
+        destroy = function() error("the bridge must never call destroy") end,
+    } })
+end
+local buildings = list({ make_building("castle_02_gate_02", 80, 40, 168, 1),
+    make_building("castle_02_wall_10_01", 80, 20, 20, 1), make_building("village_house_01", -500, 300, 0, -1) })
+
 MOCK_TIMERS = {}
 empire_battle = {}
 function empire_battle:new()
     return obj({
+        buildings = function() return buildings end,
         alliances = function() return alliances end,
         register_repeating_timer = function(_, name, ms) MOCK_TIMERS[name] = ms end,
         game_time = function() return 0 end,
@@ -169,6 +187,23 @@ def main() -> bool:
                     problems.append(f"unit id {su['id']} ({mock.name_}) points at another unit")
             if "player3" not in {u.get("name") for u in static.values()}:
                 problems.append("the reinforcement player3 never got static info")
+
+            # sieges: the building list arrives, and a garrison order reaches the engine
+            blds = link.battle.buildings or {}
+            gate = next((b for b in blds.values() if "gate" in b["name"]), None)
+            if gate is None or not gate["mil"] or gate["owner"] != 2:
+                problems.append(f"fortifications not streamed as expected: {list(blds.values())[:2]}")
+            house = next((b for b in blds.values() if "house" in b["name"]), None)
+            if house is None or house["mil"]:
+                problems.append("a village house was not recognised as scenery")
+            if gate is not None:
+                ai_id = next(u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2)
+                link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
+                          [{"cmd": "garrison", "unit": ai_id, "building": gate["id"], "run": True}])
+                tick()
+                link.poll()
+                if not any(c.startswith("garrison") for c in g.MOCK_CALLS.values()):
+                    problems.append(f"garrison order did not reach the engine: {link.battle.applied[-1:]}")
 
             g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")

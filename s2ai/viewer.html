@@ -88,7 +88,8 @@ function buildLive() {
   if (!live || !live.battle) { view = null; render(); return; }
   view = { title: `Live: battle ${live.battle}`,
     sub: `t=${(live.t||0).toFixed(0)}s · phase ${live.phase||'?'} · AI alliance ${live.ai} · ${live.general||''} · plans ${live.plans||0}`,
-    units: live.units || [], plan: live.plan, orders: live.orders || [], log: (live.log || []).slice().reverse() };
+    units: live.units || [], plan: live.plan, orders: live.orders || [], log: (live.log || []).slice().reverse(),
+    buildings: live.buildings || [] };
   render();
 }
 async function openReplay(id) {
@@ -105,7 +106,14 @@ function buildReplay() {
   const fr = rep.frames; let lo = 0, hi = fr.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (fr[m].t <= T) lo = m; else hi = m - 1; }
   const f = fr[lo] || {u: [], t: 0};
-  const units = f.u.map(([id, x, y, h, w, men, fl]) => ({id, x, y, h, w, men, rout: !!(fl & 1), ctl: !!(fl & 2), ...(rep.units[id] || {})}));
+  const units = f.u.map(([id, x, y, h, w, men, fl, z]) => ({id, x, y, h, w, men, z, rout: !!(fl & 1), ctl: !!(fl & 2), gar: !!(fl & 4), ...(rep.units[id] || {})}));
+  // fortifications as of time T: static list + the latest state update at or before T
+  const bstate = {};
+  for (const s of rep.bstates || []) { if (s.t > T) break; for (const [id, hp, owner, gar] of s.b) bstate[id] = {hp, owner, gar}; }
+  const buildings = (rep.buildings || []).map(b => {
+    const s = bstate[b.id]; if (!s) return b;
+    return {...b, hp: s.hp, gar: !!s.gar, side: s.owner === rep.ai ? 'ai' : s.owner ? 'pl' : ''};
+  });
   let pi = -1; rep.plans.forEach((p, i) => { if (p.t <= T) pi = i; });
   const plan = pi >= 0 ? rep.plans[pi] : null;
   const orders = []; for (const o of rep.orders) if (o.t <= T && o.t > T - 2) orders.push(...o.orders);
@@ -115,7 +123,7 @@ function buildReplay() {
   log.sort((a, b) => parseFloat(b.slice(2)) - parseFloat(a.slice(2)));
   view = { title: `Replay: battle ${rep.battle}`,
     sub: `phase ${f.phase||'?'} · AI alliance ${rep.ai} · ${rep.plans.length} plans` + (plan && plan.info ? ` · this plan took ${plan.info.seconds}s` : ''),
-    units, plan: plan && plan.plan, orders, log, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
+    units, buildings, plan: plan && plan.plan, orders, log, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
   $('slider').value = Math.floor(T); $('tlabel').textContent = `${T.toFixed(0)}s`;
   document.querySelectorAll('#plans div').forEach(d => d.classList.toggle('cur', +d.dataset.i === pi));
   render();
@@ -133,7 +141,7 @@ function render() {
   $('intent').textContent = plan ? plan.intent : '–';
   $('reasoning').textContent = plan ? plan.reasoning : '–';
   $('groups').innerHTML = plan ? plan.groups.map(g =>
-    `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${esc(g.task)}${g.target ? ' ' + esc(g.target) : ''}` +
+    `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${esc(g.task)}${g.target ? ' ' + esc(g.target) : ''}${g.building != null ? ' b' + esc(g.building) : ''}` +
     `${g.position ? ' @' + g.position.map(v => (+v).toFixed(0)).join(',') : ''}` +
     `${g.engage_within_m ? ' · engage ' + esc(g.engage_within_m) + 'm' : ''}${g.keep_range_m ? ' · keep ' + esc(g.keep_range_m) + 'm' : ''}</li>`).join('') : '';
   if (view.report !== undefined) $('report').textContent = view.report || '–';
@@ -158,13 +166,41 @@ function render() {
   for (let gx = Math.floor((cx - W / 2 / s) / 100) * 100; gx < cx + W / 2 / s; gx += 100) { const [px] = P(gx, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke(); }
   for (let gy = Math.floor((cy - H / 2 / s) / 100) * 100; gy < cy + H / 2 / s; gy += 100) { const [, py] = P(0, gy); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke(); }
 
+  const col = {ai: getVar('--ai'), pl: getVar('--pl'), plan: getVar('--plan')};
+  // buildings under everything else: scenery as faint dots, fortifications as squares by kind and owner
+  const SIZE = {wall: 9, tower: 13, gate: 15, keep: 24, building: 9};
+  const sideCol = sd => sd === 'ai' ? col.ai : sd === 'pl' ? col.pl : '#7a7568';
+  for (const b of view.buildings || []) {
+    const [px, py] = P(b.x, b.y);
+    if (px < -40 || py < -40 || px > W + 40 || py > H + 40) continue;
+    if (b.kind === 'scenery') { ctx.fillStyle = '#3a3a3a'; ctx.fillRect(px - 2, py - 2, 4, 4); continue; }
+    const sz = Math.max(5, (SIZE[b.kind] || 9) * s);
+    const hp = typeof b.hp === 'number' ? Math.max(0.15, Math.min(1, b.hp)) : 1;
+    ctx.globalAlpha = 0.35 + 0.65 * hp;
+    ctx.fillStyle = b.gar ? sideCol(b.side) : '#2c2a26';
+    ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+    ctx.strokeStyle = sideCol(b.side); ctx.lineWidth = b.kind === 'wall' ? 1.5 : 2.5;
+    ctx.strokeRect(px - sz / 2, py - sz / 2, sz, sz);
+    ctx.globalAlpha = 1;
+    if (b.kind !== 'wall') {
+      ctx.fillStyle = '#d8d2c4'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText({gate: 'G', tower: 'T', keep: 'K'}[b.kind] || '', px, py);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#9a968c'; ctx.font = '9px system-ui'; ctx.fillText('b' + b.id, px + sz / 2 + 2, py - sz / 2);
+    }
+  }
+  fit.buildings = view.buildings || [];
+
   const byId = Object.fromEntries(units.map(u => [u.id, u]));
   for (const o of view.orders) {
     const u = byId[o.unit]; if (!u) continue;
     let tx, ty;
+    const bld = o.building != null ? (view.buildings || []).find(b => b.id === o.building) : null;
     if (o.cmd === 'attack' && byId[o.target]) { tx = byId[o.target].x; ty = byId[o.target].y; }
-    else if (o.cmd === 'move') { tx = o.x; ty = o.y; } else continue;
-    arrow(P(u.x, u.y), P(tx, ty), o.cmd === 'attack' ? 'rgba(208,80,60,.85)' : 'rgba(232,193,90,.85)');
+    else if ((o.cmd === 'move' || o.cmd === 'occupy') && o.x != null) { tx = o.x; ty = o.y; }
+    else if (bld) { tx = bld.x; ty = bld.y; } else continue;
+    const hostile = o.cmd === 'attack' || o.cmd === 'attack_building' || o.cmd === 'climb';
+    arrow(P(u.x, u.y), P(tx, ty), hostile ? 'rgba(208,80,60,.85)' : 'rgba(232,193,90,.85)');
   }
   if (plan) for (const g of plan.groups) if (g.position) {
     const [px, py] = P(g.position[0], g.position[1]);
@@ -172,7 +208,6 @@ function render() {
     ctx.beginPath(); ctx.arc(px, py, 10, 0, 7); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(232,193,90,.9)'; ctx.font = '11px system-ui'; ctx.fillText(g.name, px + 12, py - 8);
   }
-  const col = {ai: getVar('--ai'), pl: getVar('--pl'), plan: getVar('--plan')};
   for (const u of units) {
     const [px, py] = P(u.x, u.y);
     const w = Math.max(6, (u.w || 30) * s), d = Math.max(4, 8 * s + 3);
@@ -244,8 +279,16 @@ c.addEventListener('mousemove', ev => {
   const r = c.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
   let best = null, bd = 14;
   for (const u of fit.units) { const [px, py] = fit.P(u.x, u.y); const d = Math.hypot(px - mx, py - my); if (d < bd) { bd = d; best = u; } }
-  if (!best) { tip.style.display = 'none'; return; }
-  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}`;
+  if (!best) {
+    let bb = null, bbd = 10;
+    for (const b of fit.buildings || []) { if (b.kind === 'scenery') continue; const [px, py] = fit.P(b.x, b.y); const d = Math.hypot(px - mx, py - my); if (d < bbd) { bbd = d; bb = b; } }
+    if (!bb) { tip.style.display = 'none'; return; }
+    tip.innerHTML = `<b>b${bb.id}</b> ${esc(bb.kind)} · ${esc(bb.name || '')}<br>${bb.side === 'ai' ? 'AI' : bb.side === 'pl' ? 'player' : 'nobody'} · holds ${bb.cap || 0} men · alt ${bb.z} m` +
+      `${typeof bb.hp === 'number' ? ' · health ' + Math.round(bb.hp * 100) + '%' : ''}${bb.gar ? ' · garrisoned' : ''}`;
+    tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
+    return;
+  }
+  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.z != null ? ' · alt ' + best.z + ' m' : ''}${best.gar ? ' · garrisoned' : ''}${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}`;
   tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
 });
 c.addEventListener('mouseleave', () => $('tip').style.display = 'none');
@@ -268,7 +311,9 @@ function loop(now) {
 window.addEventListener('resize', render);
 $('symbols').innerHTML = CLASSES.map(([, icon, name]) =>
   `<div><b style="display:inline-block;width:26px;color:var(--ink)">${icon}</b>${name}</div>`).join('') +
-  '<div style="margin-top:4px">box = unit frontage, white edge = its front</div>';
+  '<div style="margin-top:4px">box = unit frontage, white edge = its front</div>' +
+  '<div style="margin-top:6px">squares = fortifications: G gate, T tower, K keep, plain = wall; ' +
+  'outline = owner, filled = garrisoned, faded = damaged; grey dots = other buildings</div>';
 loadBattles(); pollLive(); requestAnimationFrame(loop);
 </script>
 </body>

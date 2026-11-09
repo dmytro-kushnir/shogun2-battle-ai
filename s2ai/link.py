@@ -48,7 +48,7 @@ class Battle:
     ended: bool = False
     events: list = field(default_factory=list)
     applied: list = field(default_factory=list)
-    buildings: dict | None = None
+    buildings: dict[int, dict] | None = None  # id -> {name, x, y, z, cap, owner (1-based, 0 none), hp, mil, gar}
 
     @property
     def static(self) -> dict[int, dict]:
@@ -120,13 +120,17 @@ class GameLink:
         if kind == "state":
             self.battle.state = msg
             self.battle.phase = msg.get("phase", self.battle.phase)
+            for i, hp, owner, gar in msg.get("buildings") or []:  # fortifications' changing state, every 2 s
+                b = (self.battle.buildings or {}).get(i)
+                if b is not None:
+                    b["hp"], b["owner"], b["gar"] = hp, owner, bool(gar)
         elif kind == "event":
             self.battle.events.append(msg)
             self.battle.phase = msg.get("phase", self.battle.phase)
         elif kind == "applied":
             self.battle.applied.append(msg)
-        elif kind == "buildings":  # walls, gates, towers: what the bridge could read (discovery stage)
-            self.battle.buildings = msg.get("data")
+        elif kind == "buildings":  # every building on the map, once: walls, gates, towers, keep, houses
+            self.battle.buildings = {b["id"]: b for b in msg.get("buildings", [])}
         elif kind == "units":  # units that joined after the start (reinforcements): their static info
             have = {u["id"] for u in self.battle.start["units"]}
             self.battle.start["units"].extend(u for u in msg.get("units", []) if u["id"] not in have)

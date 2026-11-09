@@ -13,4 +13,7 @@ The general always plans with these. One point per line; edit freely, the file i
 - Missile units (bows, matchlocks, rifles, artillery) are weak in melee. They shoot only within their range and only while they have ammunition. Matchlocks and rifles cannot fire over friendly units in front of them; bows can arc over them.
 - Running tires units; tired units fight worse and break sooner. Walk over long distances, run for the last stretch or to catch a moving target.
 - Units only move along the ground: they cannot cross impassable terrain, and in forests they are slower and harder to shoot.
+- Sieges: the report lists the FORTIFICATIONS with ids (b12): gates, towers, the keep and wall sections, who holds each, and how many men each can hold. Altitude ("alt") tells who is up on the castle level and who is below.
+- Defenders: missile units garrisoned on walls and towers (task garrison) shoot down at attackers and are hard to reach; keep melee units behind the walls at the gates and where ladders come up, and a reserve near the keep.
+- Attackers: infantry can scale wall sections (task climb) or break a gate (attack_building); cavalry is poor at both and better kept for the open ground or for after a breach. Taking and holding the keep's area wins a castle (task occupy).
 - Your orders take a few seconds to reach the battlefield, and the battle goes on while you think: plan for where things will be, not only where they are.

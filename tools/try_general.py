@@ -33,14 +33,32 @@ state = min(states, key=lambda s: abs(s["t"] - args.at))
 events = [m for m in msgs if m["type"] == "event" and m.get("tick", 0) * 0.5 <= state["t"]]
 ai = args.ai or guess_ai_alliance(start)
 static = {u["id"]: u for u in start["units"]}
+for m in msgs:
+    if m["type"] == "units":
+        static.update({u["id"]: u for u in m["units"]})
 
-text, units = report.build(static, state, ai, events, None, None)
+# buildings: the current format, or the first siege recording's discovery format
+buildings = None
+bmsg = next((m for m in msgs if m["type"] == "buildings"), None)
+if bmsg and "buildings" in bmsg:
+    buildings = {b["id"]: b for b in bmsg["buildings"]}
+elif bmsg and isinstance(bmsg.get("data"), dict):
+    buildings = {}
+    for it in bmsg["data"].get("items", []):
+        p, owner = it.get("position") or {}, it.get("alliance_owner_id", -1)
+        name, cap = it.get("name", ""), it.get("capacity") or 0
+        buildings[it["i"]] = {"id": it["i"], "name": name, "x": p.get("x"), "y": p.get("y"), "z": p.get("z"),
+                              "cap": cap, "owner": owner + 1 if owner >= 0 else 0, "hp": it.get("health"),
+                              "mil": cap > 0 or owner >= 0 or report.building_kind(name) != "building"}
+
+text, units = report.build(static, state, ai, events, None, None, buildings)
 print(text)
 print("\n" + "=" * 100)
 general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
 raw, info = general.plan(text)
 general.close()
-plan, problems = validate(raw, {u.id for u in units if u.alliance == ai}, {u.id for u in units if u.alliance != ai})
+plan, problems = validate(raw, {u.id for u in units if u.alliance == ai}, {u.id for u in units if u.alliance != ai},
+                          {f["id"] for f in report.fortifications(buildings)})
 print(f"PLAN in {info['seconds']}s, {info['tokens_in']} in / {info['tokens_out']} out tokens, ~${info['api_equiv_usd']:.3f} API-equivalent")
 print(json.dumps(plan, indent=1))
 for p in problems:

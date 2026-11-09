@@ -96,7 +96,7 @@ class GeneralCommander:
         try:
             raw, info, report_text, asked_t = self.results.get_nowait()
             self.busy = False
-            self._apply(raw, info, report_text, asked_t, units, t)
+            self._apply(raw, info, report_text, asked_t, units, t, battle)
         except queue.Empty:
             pass
         if not self.busy and conflict(battle) and t >= self.next_plan_t:
@@ -107,7 +107,7 @@ class GeneralCommander:
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
-                               t - self.plan_t if self.executor.plan else None)
+                               t - self.plan_t if self.executor.plan else None, battle.buildings)
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -120,7 +120,7 @@ class GeneralCommander:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply(self, raw, info, report_text, asked_t, units, t) -> None:
+    def _apply(self, raw, info, report_text, asked_t, units, t, battle) -> None:
         if raw is None:
             log.warning("plan failed: %s", info.get("error"))
             self.board.note(f"t={t:.0f}s plan FAILED: {info.get('error')}")
@@ -128,7 +128,8 @@ class GeneralCommander:
             return
         ours = {u.id for u in units if u.alliance == self.ai}
         enemies = {u.id for u in units if u.alliance != self.ai}
-        plan, problems = validate(raw, ours, enemies)
+        forts = {f["id"] for f in report.fortifications(battle.buildings)}
+        plan, problems = validate(raw, ours, enemies, forts)
         self.executor.set_plan(plan, units, t)
         self.plan_t = t
         self.plans += 1
@@ -240,9 +241,23 @@ def main() -> None:
                     {"id": u.id, "x": round(u.x, 1), "y": round(u.y, 1), "h": round(u.h), "w": u.w, "men": u.men,
                      "men0": u.men0, "type": u.type,
                      "ai": u.alliance == ai, "kind": u.kind, "missile": u.missile, "gen": u.general,
-                     "rout": u.routing or u.shattered, "ctl": u.id in take}
-                    for u in units if u.alive])
+                     "rout": u.routing or u.shattered, "ctl": u.id in take, "z": round(u.z, 1), "gar": u.garrisoned}
+                    for u in units if u.alive], buildings=map_buildings(b.buildings, ai))
         time.sleep(POLL_S)
+
+
+def map_buildings(buildings: dict | None, ai: int) -> list[dict]:
+    """Buildings for the map: fortifications with kind / side / health, other buildings as plain shapes."""
+    out = []
+    for bb in (buildings or {}).values():
+        if bb.get("x") is None:
+            continue
+        kind = report.building_kind(bb.get("name")) if bb.get("mil") else "scenery"
+        owner = bb.get("owner") or 0
+        out.append({"id": bb["id"], "kind": kind, "x": round(bb["x"], 1), "y": round(bb["y"], 1),
+                    "z": round(bb.get("z") or 0, 1), "side": "ai" if owner == ai else "pl" if owner else "",
+                    "hp": bb.get("hp"), "gar": bool(bb.get("gar")), "cap": bb.get("cap"), "name": bb.get("name")})
+    return out
 
 
 if __name__ == "__main__":

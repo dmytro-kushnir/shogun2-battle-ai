@@ -34,6 +34,8 @@ class U:
     gone: bool
     ammo: float | None
     range: float
+    z: float = 0.0          # altitude, metres
+    garrisoned: bool = False
 
     @property
     def alive(self) -> bool:
@@ -70,8 +72,57 @@ def merge(static: dict[int, dict], state: dict) -> list[U]:
             moving=bool(s.get("mov")), running=bool(s.get("run")),
             routing=bool(s.get("rout")), shattered=bool(s.get("shat")), gone=bool(s.get("gone")),
             ammo=s.get("ammo"), range=st.get("range") or 0.0,
+            z=s.get("z") or 0.0, garrisoned=bool(s.get("gar")),
         ))
     return units
+
+
+# ---------------------------------------------------------------- fortifications
+
+def building_kind(name: str) -> str:
+    n = (name or "").lower()
+    if "gate" in n:
+        return "gate"
+    if "keep" in n or "honmaru" in n:
+        return "keep"
+    if "corner" in n or "tower" in n or "turret" in n or "yagura" in n:
+        return "tower"
+    if "wall" in n or "palisade" in n or "stockade" in n:
+        return "wall"
+    return "building"
+
+
+def fortifications(buildings: dict[int, dict] | None) -> list[dict]:
+    """Military buildings with a kind; houses and scenery left out."""
+    if not buildings:
+        return []
+    out = []
+    for b in buildings.values():
+        if not b.get("mil") or b.get("x") is None:
+            continue
+        kind = building_kind(b.get("name"))
+        if kind == "building" and not b.get("cap"):
+            continue
+        out.append({**b, "kind": kind})
+    return out
+
+
+def fort_section(forts: list[dict], ai: int) -> list[str]:
+    if not forts:
+        return []
+    side = lambda o: "yours" if o == ai else "nobody's" if not o else "ENEMY"
+    xs, ys, zs = [f["x"] for f in forts], [f["y"] for f in forts], [f.get("z") or 0 for f in forts]
+    out = ["", "FORTIFICATIONS (siege). Units on the walls / at the castle level stand at about this altitude: "
+           f"{sum(zs) / len(zs):.0f} m. Extent x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}."]
+    out.append("  Use the building id with the tasks garrison / climb / attack_building.")
+    order = {"gate": 0, "keep": 1, "tower": 2, "wall": 3, "building": 4}
+    for f in sorted(forts, key=lambda f: (order[f["kind"]], f["id"])):
+        hp = f.get("hp")
+        dmg = f" health {hp:.0%}" if isinstance(hp, (int, float)) and hp < 0.999 else ""
+        gar = " GARRISONED" if f.get("gar") else ""
+        out.append(f"  b{f['id']:<4} {f['kind']:<6} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:4.0f} "
+                   f"holds {f.get('cap') or 0:>3} men, {side(f.get('owner'))}{dmg}{gar}")
+    return out
 
 
 def dist(a, b) -> float:
@@ -117,14 +168,14 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool) -> str:
         ammo = f" ammo {u.ammo}" if u.ammo is not None else ""
         ammo += f" range {u.range:.0f}m"
     line = (f"  {u.id:>5} {u.label[:34]:<34} {kind:<18} {u.men:>4}/{u.men0:<4} at ({u.x:6.0f},{u.y:6.0f}) "
-            f"facing {u.h:3.0f} {state_word(u, d)}{ammo}")
+            f"alt {u.z:4.0f} facing {u.h:3.0f} {state_word(u, d)}{' GARRISONED' if u.garrisoned else ''}{ammo}")
     if show_nearest and near is not None:
         line += f" | nearest enemy {near.id} {d:.0f}m {compass(bearing(u.x, u.y, near.x, near.y))}"
     return line
 
 
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
-          plan_age_s: float | None) -> tuple[str, list[U]]:
+          plan_age_s: float | None, buildings: dict[int, dict] | None = None) -> tuple[str, list[U]]:
     units = merge(static, state)
     ours = [u for u in units if u.alliance == ai and u.alive]
     theirs = [u for u in units if u.alliance != ai and u.alive]
@@ -140,8 +191,9 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append(f"Enemy: {len(fit_theirs)} fighting units, {men_e} men, centre ({ex:.0f},{ey:.0f}), "
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
+    out.extend(fort_section(fortifications(buildings), ai))
     out.append("")
-    out.append("YOUR UNITS (id, type, kind, men, position, facing, state):")
+    out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
         out.append(unit_line(u, fit_theirs, show_nearest=True))
     out.append("")
@@ -164,6 +216,9 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
         out.append(f"YOUR CURRENT PLAN (given {plan_age_s or 0:.0f}s ago): {plan['intent']}")
         for g in plan["groups"]:
             what = {"attack": f"attack {g['target']}", "move": f"move to {g['position']}",
-                    "hold": f"hold at {g['position'] or 'current place'}", "withdraw": "withdraw"}[g["task"]]
+                    "hold": f"hold at {g['position'] or 'current place'}", "withdraw": "withdraw",
+                    "garrison": f"garrison b{g.get('building')}", "climb": f"climb b{g.get('building')}",
+                    "attack_building": f"attack building b{g.get('building')}",
+                    "occupy": f"occupy {g['position']}"}.get(g["task"], g["task"])
             out.append(f"  - {g['name']}: {g['units']} {what}")
     return "\n".join(out), units

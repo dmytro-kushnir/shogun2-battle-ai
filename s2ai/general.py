@@ -38,6 +38,10 @@ How to answer:
   facing `facing` (compass degrees; null = towards the enemy). hold: like move, `position` null = stay where they are.
 - Use the reflexes: infantry lines usually engage_within_m 30-60; missile units keep_range_m 40-80 and
   engage_within_m 0; cavalry in reserve engage_within_m 0 until you commit it.
+- Sieges (a FORTIFICATIONS section is in the report): a position next to a wall is on the ground, NOT on the wall.
+  To put a unit ON a wall section, tower or gate, use task garrison with that building's id (one unit per
+  building; pick the sections facing the enemy). Defending missile units belong on the walls facing the attack.
+  Attackers use climb on a wall section, attack_building on a gate, and occupy on the keep's area.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.
