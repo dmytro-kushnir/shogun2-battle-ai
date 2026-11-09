@@ -45,3 +45,11 @@ py -3.14 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 ## Tools
 
 - `tools/packtool.ps1` - lists / extracts files from Shogun 2 packs (original `PFH3` and CE `PFHs` with LZ4).
+
+## Playing against the server (historical battles for now)
+
+```powershell
+.\.venv\Scripts\python -m s2ai.server        # demo commander: AI units attack the nearest enemy
+.\.venv\Scripts\python tools\test_bridge.py  # end-to-end test without the game
+```
+

@@ -45,9 +45,8 @@ if (-not $DataDirs) { throw 'No Shogun 2 Complete Edition data folder found; pas
 
 $ProbePath = Join-Path $Repo 'lua\s2ai_probe.lua'
 
-# "ui": dofile() the probe from the repo, so edits apply without reinstalling (dofile + io proved to work there).
-# "battle": paste the probe source in, wrapped in pcall - the battle-script state may lack dofile/io, and an
-#           error at the top of a historical battle's script must never stop that script from running.
+# Every loader dofile()s a script from the repo inside pcall: an error in our code must never stop the game's
+# own script (prepended loaders sit at the top of historical battle scripts).
 function Get-Loader($envName) {
     $report = @"
 	if not ok then
@@ -57,12 +56,10 @@ function Get-Loader($envName) {
 		end)
 	end
 "@
-    if ($envName -eq 'battle') {
-        $src = [IO.File]::ReadAllText($ProbePath)
-        $body = "local ok, err = pcall(function()`n$src`nend)`n$report"
-    } else {
-        $body = "local ok, err = pcall(dofile, S2AI_ROOT .. `"/lua/s2ai_probe.lua`")`n$report"
-    }
+    # battle state: the bridge (run 6 proved dofile + io work there, so edits apply without reinstalling);
+    # UI and main-menu states: the probe (diagnostics only)
+    $script = if ($envName -eq 'battle') { 's2ai_bridge.lua' } else { 's2ai_probe.lua' }
+    $body = "local ok, err = pcall(dofile, S2AI_ROOT .. `"/lua/$script`")`n$report"
     @"
 $Marker (tools/install.ps1; remove with -Uninstall)
 S2AI_ROOT = "$RepoLua"
