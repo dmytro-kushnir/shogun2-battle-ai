@@ -332,6 +332,17 @@ function S2AI_Bridge_Tick()
 	if not B.battle or B.over then return end
 	local ok, err = pcall(function()
 		B.tick = B.tick + 1
+		if not B.buildings_scanned then
+			B.buildings_scanned = true
+			log("first tick: the battle timer runs")
+			local okb, buildings = pcall(scan_buildings)
+			if okb then
+				emit({ type = "buildings", buildings = buildings })
+			else
+				log("BUILDINGS ERROR: " .. tostring(buildings))
+				B.buildings, B.forts = {}, {}
+			end
+		end
 		local known = B.units or {}
 		scan()
 		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
@@ -399,28 +410,49 @@ local function is_military(name, cap, owner)
 	return false
 end
 
+local function num(v) return type(v) == "number" and v or nil end
+
 local function owner_alliance(b)
-	local o = call(b, "alliance_owner_id")
+	local o = num(call(b, "alliance_owner_id"))
 	return (o and o >= 0) and (o + 1) or 0 -- 1-based like units' alliances; 0 = nobody
+end
+
+-- Not every item of battle:buildings() is a building: run 14 got a function back from alliance_owner_id past
+-- the first items, and the battle's script timer never fired afterwards. Calling an engine method on an object
+-- of another class can make the C++ side misread it, so an item is only touched when its metatable IS the
+-- registered battle.building class.
+local function building_class()
+	local ok, reg = pcall(debug.getregistry)
+	return ok and type(reg) == "table" and reg["battle.building"] or nil
 end
 
 function scan_buildings() -- assigns the local declared at the top
 	B.buildings, B.forts = {}, {}
+	local cls = building_class()
+	if not cls then
+		log("buildings: battle.building class not found in the registry - no fortification data")
+		return {}
+	end
 	local list = call(B.battle, "buildings")
-	local n = list and call(list, "count") or 0
-	local out = {}
-	for i = 1, math.min(n, 2000) do
+	local n = list and num(call(list, "count")) or 0
+	local out, skipped = {}, 0
+	for i = 1, math.min(n, 1000) do
 		local b = call(list, "item", i)
-		if b then
+		if type(b) ~= "userdata" or getmetatable(b) ~= cls then
+			skipped = skipped + 1
+		else
 			local p = call(b, "position")
-			local name, cap, owner = call(b, "name"), call(b, "capacity"), owner_alliance(b)
+			local name, cap, owner = call(b, "name"), num(call(b, "capacity")), owner_alliance(b)
+			name = type(name) == "string" and name or "?"
 			local mil = is_military(name, cap, owner - 1)
 			B.buildings[i] = b
 			if mil then B.forts[#B.forts + 1] = i end
-			out[#out + 1] = { id = i, name = name, x = p and call(p, "get_x"), y = p and call(p, "get_z"),
-				z = p and call(p, "get_y"), cap = cap, owner = owner, hp = call(b, "health"), mil = mil }
+			out[#out + 1] = { id = i, name = name, x = p and num(call(p, "get_x")), y = p and num(call(p, "get_z")),
+				z = p and num(call(p, "get_y")), cap = cap, owner = owner, hp = num(call(b, "health")), mil = mil }
 		end
 	end
+	log(string.format("buildings: %d listed, %d read (%d fortifications), %d skipped (not battle.building)",
+		n, #out, #B.forts, skipped))
 	return out
 end
 
@@ -458,13 +490,7 @@ local function start()
 	local units = {}
 	for _, id in ipairs(sorted_ids()) do units[#units + 1] = static_record(id, B.units[id]) end
 	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units })
-	local okb, buildings = pcall(scan_buildings)
-	if okb then
-		emit({ type = "buildings", buildings = buildings })
-	else
-		log("BUILDINGS ERROR: " .. tostring(buildings))
-		B.buildings, B.forts = {}, {}
-	end
+	B.buildings, B.forts, B.buildings_scanned = {}, {}, false -- read on the first tick, once the timer runs
 	pcall(function()
 		local f = io.open(RUN .. "/current_battle.txt", "w")
 		f:write(B.id)

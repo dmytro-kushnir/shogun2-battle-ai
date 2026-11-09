@@ -76,7 +76,7 @@ local function make_army(prefix, n, x0, handicap)
                 goto_location_angle_width = function(_, p) each(function(u) u.dest = p end) end,
                 halt = function() each(function(u) u.dest = nil; u.target = nil end) end,
                 defend_building = function(_, b, run)
-                    MOCK_CALLS[#MOCK_CALLS + 1] = "garrison " .. mine[1].name_ .. "->" .. b.name_
+                    MOCK_CALLS[#MOCK_CALLS + 1] = "garrison " .. mine[1].name_ .. "->" .. MOCK_BUILDING_NAME(b)
                 end,
             })
         end,
@@ -89,19 +89,33 @@ local alliances = list({
     obj({ armies = function() return list({ ai_army }) end }),
 })
 
--- two fortification pieces and a house, as battle:buildings() lists them
+-- buildings as battle:buildings() lists them: all share the registered battle.building class (like the engine's
+-- userdata), plus one item of ANOTHER class (run 14: such items exist; calling methods on them broke the battle)
+local FIELDS = {}
+local METHODS = {
+    name = function(s) return FIELDS[s].name_ end, position = function(s) return FIELDS[s].pos end,
+    capacity = function(s) return FIELDS[s].cap end, alliance_owner_id = function(s) return FIELDS[s].owner end,
+    health = function() return 1 end, currently_garrisoned = function() return false end,
+    destroy = function() error("the bridge must never call destroy") end,
+}
+local BASE = newproxy(true)                 -- every building shares this metatable, like the engine's class
+getmetatable(BASE).__index = METHODS
+debug.getregistry()["battle.building"] = getmetatable(BASE)
 local function make_building(name, x, z, cap, owner)
-    local b = { name_ = name, pos = battle_vector:new() }
-    b.pos:set(x, 120, z)
-    return setmetatable(b, { __index = {
-        name = function(s) return s.name_ end, position = function(s) return s.pos end,
-        capacity = function() return cap end, alliance_owner_id = function() return owner end,
-        health = function() return 1 end, currently_garrisoned = function() return false end,
-        destroy = function() error("the bridge must never call destroy") end,
-    } })
+    local b = newproxy(BASE)
+    FIELDS[b] = { name_ = name, pos = battle_vector:new(), cap = cap, owner = owner }
+    FIELDS[b].pos:set(x, 120, z)
+    return b
+end
+function MOCK_BUILDING_NAME(b) return FIELDS[b].name_ end
+MOCK_FOREIGN_TOUCHED = false
+local foreign = newproxy(true)
+getmetatable(foreign).__index = function(_, k)
+    MOCK_FOREIGN_TOUCHED = true
+    return function() return function() end end  -- alliance_owner_id() returns a function, as in run 14
 end
 local buildings = list({ make_building("castle_02_gate_02", 80, 40, 168, 1),
-    make_building("castle_02_wall_10_01", 80, 20, 20, 1), make_building("village_house_01", -500, 300, 0, -1) })
+    make_building("castle_02_wall_10_01", 80, 20, 20, 1), foreign, make_building("village_house_01", -500, 300, 0, -1) })
 
 MOCK_TIMERS = {}
 empire_battle = {}
@@ -196,6 +210,10 @@ def main() -> bool:
             house = next((b for b in blds.values() if "house" in b["name"]), None)
             if house is None or house["mil"]:
                 problems.append("a village house was not recognised as scenery")
+            if g.MOCK_FOREIGN_TOUCHED:
+                problems.append("the bridge called methods on a buildings() item that is not a battle.building")
+            if len(blds) != 3:
+                problems.append(f"expected 3 buildings read (the foreign item skipped), got {len(blds)}")
             if gate is not None:
                 ai_id = next(u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2)
                 link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
