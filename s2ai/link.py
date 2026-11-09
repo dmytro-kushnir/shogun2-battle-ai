@@ -143,6 +143,13 @@ class GameLink:
             self._last_orders = orders
         tmp = self.runtime / "orders.lua.tmp"
         tmp.write_text("return " + to_lua(body) + "\n", encoding="ascii")
-        os.replace(tmp, self.runtime / "orders.lua")
+        # the game may be reading orders.lua right now (Windows then refuses the replace): retry briefly
+        for attempt in range(20):
+            try:
+                os.replace(tmp, self.runtime / "orders.lua")
+                return
+            except PermissionError:
+                time.sleep(0.02)
+        raise PermissionError("orders.lua stayed locked for 0.4 s")
 
     _last_orders: list = []

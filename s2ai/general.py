@@ -21,7 +21,9 @@ from .plan import PLAN_SCHEMA
 log = logging.getLogger("s2ai.general")
 
 REPO = Path(__file__).resolve().parent.parent
-CONVERSATION_PLANS = 25
+# Every plan stays in the conversation, so each new one costs more: in the first live battle plan #25 cost
+# ~$0.79 API-equivalent against ~$0.03 for a fresh conversation. The report carries the current plan anyway.
+CONVERSATION_PLANS = 6
 TIMEOUT_S = 90
 
 INSTRUCTIONS = """You are the commanding general of one army in a Total War: SHOGUN 2 battle, fighting against a

@@ -209,15 +209,18 @@ def main() -> None:
                 last_tick = b.state["tick"]
                 decision = commander.decide(b)
                 now = time.monotonic()
-                if decision is not None and (decision[1] or decision[0] != take):
-                    take, orders = decision
-                    link.send(take, orders)
-                    last_write = now
-                    if orders:
-                        board.update(orders=orders)
-                elif take and now - last_write > HEARTBEAT_S:
-                    link.heartbeat(take)
-                    last_write = now
+                try:
+                    if decision is not None and (decision[1] or decision[0] != take):
+                        take, orders = decision
+                        link.send(take, orders)
+                        last_write = now
+                        if orders:
+                            board.update(orders=orders)
+                    elif take and now - last_write > HEARTBEAT_S:
+                        link.heartbeat(take)
+                        last_write = now
+                except OSError as e:  # never die mid-battle over a file hiccup; the next tick writes again
+                    log.warning("could not write orders: %s", e)
                 ai = commander.ai
                 units = report.merge(b.static, b.state)
                 board.update(t=b.state["t"], phase=b.phase, units=[
