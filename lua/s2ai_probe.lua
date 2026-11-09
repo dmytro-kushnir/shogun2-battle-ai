@@ -446,31 +446,67 @@ local function ui_class(name)
 	return type(c) == "table" and type(c.__index) == "table" and c.__index.new or nil
 end
 
+-- Walk the UI tree (Find(i) by child index, as frontend_scripted.lua does with ChildCount) looking for an id.
+-- Run 9: root:Find("sp_battle_setup") found nothing, so the panel is deeper than the root's children.
+local function find_deep(root, wanted)
+	local UIC = ui_class("UIComponent")
+	local queue, head, visited = { { root, "root" } }, 1, 0
+	while head <= #queue and visited < 5000 do
+		local node, path = queue[head][1], queue[head][2]
+		head, visited = head + 1, visited + 1
+		local okn, n = pcall(function() return node:ChildCount() end)
+		for i = 0, (okn and n or 0) - 1 do
+			local ok, child = pcall(function() return UIC(node:Find(i)) end)
+			if ok and child then
+				local okid, id = pcall(function() return child:Id() end)
+				local cpath = path .. "/" .. tostring(okid and id or "?")
+				if okid and id == wanted then return child, cpath, visited end
+				queue[#queue + 1] = { child, cpath }
+			end
+		end
+	end
+	return nil, nil, visited
+end
+
 local function frontend_inspect(trigger)
 	local root = S.fe_root
 	if not root then return end
 	local UIC, UBS = ui_class("UIComponent"), ui_class("UIBattleSetup")
 	for _, id in ipairs({ "sp_battle_setup", "mp_battle_setup", "panel_battle_setup" }) do
-		local okf, addr = pcall(function() return root:Find(id) end)
-		if okf and addr then
-			local key = trigger .. "/" .. id
-			S.fe_dumps = S.fe_dumps or {}
-			if (S.fe_dumps[id] or 0) >= 6 then return end
-			S.fe_dumps[id] = (S.fe_dumps[id] or 0) + 1
-			local okb, bs = pcall(function() return UBS(addr) end)
-			log(string.format("FRONTEND %s: found %s; UIBattleSetup ctor=%s -> %s %s", key, id, type(UBS),
-				tostring(okb), tostring(bs)))
-			if okb and bs then
-				local okr, details = pcall(function() return bs:RetrieveDetails() end)
-				local text = okr and dump(details) or ("ERROR " .. tostring(details))
-				log("FRONTEND RetrieveDetails(" .. id .. ") type=" .. type(details) .. ": " .. text:sub(1, 20000))
-			end
-			local okc, comp = pcall(function() return UIC(addr) end)
-			if okc and comp then
-				log(string.format("FRONTEND %s component: id=%s visible=%s children=%s", id, tostring(call(comp, "Id")),
-					tostring(call(comp, "Visible")), tostring(call(comp, "ChildCount"))))
-			end
+		local okf, comp, path, visited = pcall(find_deep, root, id)
+		if not okf then
+			log("FRONTEND find_deep ERROR: " .. tostring(comp))
+		elseif not comp then
+			log(string.format("FRONTEND %s: %s not found (%d components walked)", trigger, id, visited or -1))
 		end
+		local addr = okf and comp and call(comp, "Address")
+		if okf and comp then log(string.format("FRONTEND %s: %s at %s address=%s", trigger, id, path, tostring(addr))) end
+		if addr then S.try_setup(trigger .. "/" .. id, addr) end
+	end
+	if S.fe_screen then
+		local addr = call(S.fe_screen, "Address")
+		if addr then S.try_setup(trigger .. "/screen_component", addr) end
+	end
+end
+
+-- wrap a component address as UIBattleSetup and log RetrieveDetails(); at most 6 times per label kind
+function S.try_setup(key, addr)
+	local UIC, UBS = ui_class("UIComponent"), ui_class("UIBattleSetup")
+	local kind = key:match("[^/]+$")
+	S.fe_dumps = S.fe_dumps or {}
+	if (S.fe_dumps[kind] or 0) >= 6 then return end
+	S.fe_dumps[kind] = (S.fe_dumps[kind] or 0) + 1
+	local okb, bs = pcall(function() return UBS(addr) end)
+	log(string.format("FRONTEND %s: UIBattleSetup ctor=%s -> %s %s", key, type(UBS), tostring(okb), tostring(bs)))
+	if okb and bs then
+		local okr, details = pcall(function() return bs:RetrieveDetails() end)
+		local text = okr and dump(details) or ("ERROR " .. tostring(details))
+		log("FRONTEND RetrieveDetails(" .. key .. ") type=" .. type(details) .. ": " .. text:sub(1, 20000))
+	end
+	local okc, comp = pcall(function() return UIC(addr) end)
+	if okc and comp then
+		log(string.format("FRONTEND %s component: id=%s visible=%s children=%s", key, tostring(call(comp, "Id")),
+			tostring(call(comp, "Visible")), tostring(call(comp, "ChildCount"))))
 	end
 end
 
@@ -484,12 +520,19 @@ local function frontend_event(name, context)
 	elseif name == "ComponentLClickUp" then
 		local UIC = ui_class("UIComponent")
 		local ok, id = pcall(function() return UIC(context.component):Id() end)
-		log("FRONTEND click: " .. tostring(ok and id or "?"))
+		log("FRONTEND click: " .. tostring(id) .. (ok and "" or " (Id() failed)"))
 		frontend_inspect("click:" .. tostring(ok and id or "?"))
 	elseif name == "FrontEndScreenChange" then
 		local ok, s = pcall(function() return context.string end) -- a field, as frontend_scripted.lua uses it
 		log("FRONTEND screen: " .. tostring(ok and s))
-		frontend_inspect("screen")
+		if ok and s == "sp_battle_setup" then
+			-- the screen also arrives as context.component: try it directly
+			local UIC = ui_class("UIComponent")
+			local okc, comp = pcall(function() return UIC(context.component) end)
+			log("FRONTEND screen component: " .. tostring(okc and comp) .. " id=" .. tostring(okc and call(comp, "Id")))
+			if okc and comp then S.fe_screen = comp end
+		end
+		frontend_inspect("screen:" .. tostring(ok and s))
 	end
 end
 
