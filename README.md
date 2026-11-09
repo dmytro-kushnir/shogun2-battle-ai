@@ -1,4 +1,4 @@
-# Shogun 2 Battle AI
+﻿# Shogun 2 Battle AI
 
 An experiment to let an LLM command the AI side of *Total War: SHOGUN 2* battles (Complete Edition and
 Remastered CE), inspired by [rome-battle-ai](https://github.com/Cegli865/rome-battle-ai).
@@ -33,6 +33,13 @@ files, what the API objects really offer, and can it take a unit from the game's
 .\tools\install.ps1            # adds a loose data\battle_scripted.lua to each CE data folder
 # play a custom battle, then look at runtime\probe.log and runtime\state.jsonl
 .\tools\install.ps1 -Uninstall
+```
+
+## Development
+
+```powershell
+py -3.14 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
+.\.venv\Scripts\python tools\check_lua.py   # compile all Lua with 5.1 + run the probe against a mock battle API
 ```
 
 ## Tools
