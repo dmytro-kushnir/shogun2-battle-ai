@@ -164,25 +164,23 @@ end
 
 -- ------------------------------------------------------------------ control
 
--- A unit controller must never be garbage-collected: its C++ destructor then runs while the engine tears the
--- battle down (or after), touching units that are gone. That corrupted the heap; the game crashed on exit
--- (0xc0000374) after every battle since the bridge stopped calling release_control at battle end. Every
--- controller we ever create is therefore kept alive here for the rest of the game session.
-S2AI_CONTROLLER_GRAVEYARD = S2AI_CONTROLLER_GRAVEYARD or {}
-local GRAVEYARD = S2AI_CONTROLLER_GRAVEYARD
-
-local function bury(uc)
-	if uc then GRAVEYARD[#GRAVEYARD + 1] = uc end
-end
-
+-- Exactly ONE controller per unit for the whole battle, created on first use and reused for every take and
+-- release (B.ucs keeps it; B.controlled says which we hold right now). The game crashed with heap corruption
+-- (0xc0000374) a few seconds after every completed battle since the bridge started forgetting controllers
+-- without releasing them and then taking the same unit again with a NEW controller: two controllers on one unit
+-- at teardown. The battle's own scripts keep one controller per unit alive until the end, and so do we.
 local function take(id)
 	if B.controlled[id] then return B.controlled[id] end
 	local e = B.units[id]
 	if not e then return nil, "no unit " .. tostring(id) end
 	local ok, uc = pcall(function()
-		local c = e.army:create_unit_controller()
-		bury(c) -- alive for the whole session, whatever happens next (see GRAVEYARD)
-		c:add_units(e.unit)
+		local c = B.ucs[id]
+		if not c then
+			c = e.army:create_unit_controller()
+			c:add_units(e.unit)
+			B.ucs[id] = c
+			B.ucs_created = B.ucs_created + 1
+		end
 		c:take_control()
 		return c
 	end)
@@ -201,10 +199,10 @@ local function on_field(id)
 	return men ~= nil and men > 0 and not call(e.unit, "is_leaving_battle")
 end
 
+-- hand a unit back to the game's AI; its controller stays in B.ucs for the next take
 local function release(id)
 	local uc = B.controlled[id]
 	if uc and on_field(id) then pcall(function() uc:release_control() end) end
-	bury(uc)
 	B.controlled[id] = nil
 end
 
@@ -216,9 +214,10 @@ end
 
 local function forget_all(reason)
 	local n = 0
-	for _, uc in pairs(B.controlled) do n = n + 1; bury(uc) end
+	for _ in pairs(B.controlled) do n = n + 1 end
 	B.controlled = {}
-	if n > 0 then log("dropped " .. n .. " controllers without engine calls: " .. reason) end
+	log(string.format("stopped commanding %d units without engine calls (%s); %d controllers used this battle",
+		n, reason, B.ucs_created or 0))
 end
 
 -- ------------------------------------------------------------------ orders
@@ -449,18 +448,20 @@ function scan_buildings() -- assigns the local declared at the top
 	local list = call(B.battle, "buildings")
 	local n = list and num(call(list, "count")) or 0
 	local out, skipped = {}, 0
+	local groups, group_order = {}, {}
 	for i = 1, math.min(n, 1000) do
 		local b = call(list, "item", i)
 		local mt = type(b) == "userdata" and getmetatable(b) or nil
-		-- the class table is either the object's metatable itself or what that metatable's __index points at
-		-- (run 15: none matched the first form)
-		local is_building = mt ~= nil and (mt == cls or (type(mt) == "table" and rawget(mt, "__index") == cls))
+		-- Run 16: each object's metatable holds the methods itself but is not the registry's class table, so
+		-- recognise a building by carrying the building methods (looked up raw: nothing is called to check)
+		local is_building = type(mt) == "table" and (mt == cls or rawget(mt, "__index") == cls or (
+			type(rawget(mt, "central_position")) == "function" and type(rawget(mt, "capacity")) == "function"
+			and type(rawget(mt, "alliance_owner_id")) == "function" and type(rawget(mt, "is_garrisoned")) == "function"))
+		local key = tostring(mt)
+		if not groups[key] then groups[key] = { n = 0, first = i, building = is_building }; group_order[#group_order + 1] = key end
+		groups[key].n = groups[key].n + 1
 		if not is_building then
 			skipped = skipped + 1
-			if skipped == 1 then
-				log(string.format("buildings: item %d skipped: type=%s mt=%s mt.__index=%s class=%s", i, type(b),
-					tostring(mt), tostring(type(mt) == "table" and rawget(mt, "__index") or nil), tostring(cls)))
-			end
 		else
 			local p = call(b, "position")
 			local name, cap, owner = call(b, "name"), num(call(b, "capacity")), owner_alliance(b)
@@ -474,6 +475,12 @@ function scan_buildings() -- assigns the local declared at the top
 	end
 	log(string.format("buildings: %d listed, %d read (%d fortifications), %d skipped (not battle.building)",
 		n, #out, #B.forts, skipped))
+	local parts = {}
+	for _, k in ipairs(group_order) do
+		local gp = groups[k]
+		parts[#parts + 1] = string.format("%d items from #%d %s", gp.n, gp.first, gp.building and "building" or "OTHER")
+	end
+	log("buildings: metatable groups: " .. table.concat(parts, "; "))
 	return out
 end
 
@@ -495,6 +502,7 @@ local function start()
 	B.stream = RUN .. "/battle-" .. B.id .. ".jsonl"
 	B.tick, B.seq, B.controlled, B.phase, B.said = 0, nil, {}, "deployment", nil
 	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n = nil, nil, false, {}, {}, {}
+	B.ucs, B.ucs_created = {}, 0
 	scan()
 	for id in pairs(B.units) do B.static_sent[id] = true end
 

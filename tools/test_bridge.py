@@ -170,7 +170,9 @@ def main() -> bool:
                 problems.append(f"timer not registered: {dict(g.MOCK_TIMERS.items())}")
             tick = g.S2AI_Bridge_Tick
             commander = None
-            for step in range(1, 81):  # 40 s
+            for step in range(1, 121):  # 60 s; the server goes silent for 20 s in the middle (units handed back,
+                # then taken again: must reuse the same controllers)
+                silent = 60 <= step < 100  # 20 s without a word from the server (the bridge allows 15 s)
                 if step == 4:
                     g.MOCK_FIRE("BattleConflictPhaseCommenced")
                 if step == 30:
@@ -187,10 +189,12 @@ def main() -> bool:
                         commander = DemoCommander(ai)
                     elif msg["type"] == "applied" and msg["errors"]:
                         problems.append(f"bridge reported errors: {msg['errors']}")
-                if commander and link.battle and link.battle.state:
+                if commander and link.battle and link.battle.state and not silent:
                     decision = commander.decide(link.battle)
                     if decision:
                         link.send(*decision)
+                if step == 99:
+                    released_during_silence = g.MOCK_RELEASES
             # ids must still mean the same units after the list was compacted: compare final positions by name
             by_name = {u.name_: u for u in g.MOCK_UNITS.values()}
             static = link.battle.static
@@ -228,10 +232,12 @@ def main() -> bool:
             g.MOCK_FIRE("BattleCompleted")
             link.poll()
             tick()  # the timer may still fire once after the battle: must not touch the engine
-            # no controller may ever be garbage-collected (its destructor corrupted the game's heap at exit)
-            kept = len(g.S2AI_CONTROLLER_GRAVEYARD)
-            if kept < g.MOCK_CONTROLLERS:
-                problems.append(f"{g.MOCK_CONTROLLERS} controllers created but only {kept} kept alive")
+            # one controller per unit for the whole battle (a second one on the same unit corrupted the heap)
+            if not released_during_silence:
+                problems.append("the units were not handed back while the server was silent")
+            n_ucs = len(list(g.S2AI_BRIDGE.ucs.keys()))  # sparse integer keys: Lua's # does not count them
+            if g.MOCK_CONTROLLERS > n_ucs:
+                problems.append(f"{g.MOCK_CONTROLLERS} controllers created for {n_ucs} units")
             if g.MOCK_LATE_RELEASES:
                 problems.append(f"release_control called {g.MOCK_LATE_RELEASES}x after the battle ended "
                                 "(crashed the real game)")
