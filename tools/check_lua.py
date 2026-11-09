@@ -113,15 +113,37 @@ def compile_all() -> bool:
     return ok
 
 
-def run_probe() -> bool:
+GAME_EVENTS = r"""
+-- the game's battle_scripted.lua leaves a global `events` table of callback lists, fired by the engine
+events = { BattleDeploymentPhaseCommenced = {}, BattleConflictPhaseCommenced = {}, BattleCompleted = {} }
+function MOCK_FIRE(name)
+    for _, f in ipairs(events[name]) do f(MOCK_EVENT(name)) end
+end
+"""
+
+
+def run_probe(late: bool) -> bool:
+    """late=False: empire_battle exists when the probe loads.
+    late=True: like the real game - it is nil at load and appears once a battle starts (game events fire)."""
+    print(f"\n==== mock battle, empire_battle {'appears later' if late else 'present at load'} ====")
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         (root / "runtime").mkdir()
         rt = lua51.LuaRuntime()
         g = rt.globals()
         rt.execute(MOCK)
+        rt.execute(GAME_EVENTS)
         g.S2AI_ROOT = str(root).replace("\\", "/")
+        hidden = g.empire_battle
+        if late:
+            g.empire_battle = None
         g.dofile(str(REPO / "lua" / "s2ai_probe.lua"))
+        if late:
+            if dict(g.MOCK_TIMERS.items()):
+                print("FAIL: registered timers before empire_battle existed")
+                return False
+            g.empire_battle = hidden
+            g.MOCK_FIRE("BattleDeploymentPhaseCommenced")
 
         timers = dict(g.MOCK_TIMERS.items())
         if timers != {"S2AI_Tick": 1000} or g.MOCK_PHASE != "S2AI_Phase":
@@ -130,14 +152,20 @@ def run_probe() -> bool:
         tick, phase = g.S2AI_Tick, g.S2AI_Phase
         for second in range(1, 61):
             if second == 3:
-                phase(g.MOCK_EVENT("Deployed"))
+                if late:
+                    g.MOCK_FIRE("BattleConflictPhaseCommenced")
+                else:
+                    phase(g.MOCK_EVENT("Deployed"))
             g.MOCK_STEP()
             tick()
+        if late:
+            g.MOCK_FIRE("BattleCompleted")
+            tick()  # must be a no-op after the reset
 
         log = (root / "runtime" / "probe.log").read_text()
         states = (root / "runtime" / "state.jsonl").read_text().splitlines()
-        print("---- probe.log (mock battle) ----")
-        print(log.rstrip())
+        print("---- probe.log (mock battle; GLOBALS line shortened) ----")
+        print("\n".join(line[:220] for line in log.rstrip().splitlines()))
         print(f"---- state.jsonl: {len(states)} lines; last: {states[-1][:200]}...")
         problems = [line for line in log.splitlines() if "ERROR" in line]
         if "CONTROL TEST end: unit moved 60.0 m" not in log:
@@ -150,6 +178,6 @@ def run_probe() -> bool:
 
 
 if __name__ == "__main__":
-    good = compile_all() and run_probe()
+    good = compile_all() and run_probe(late=False) and run_probe(late=True)
     print("\nALL OK" if good else "\nFAILED")
     sys.exit(0 if good else 1)

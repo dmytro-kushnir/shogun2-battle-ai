@@ -203,6 +203,7 @@ end
 -- ---------------------------------------------------------------- engine callbacks (globals, called by name)
 
 function S2AI_Tick()
+	if not S.battle then return end
 	local ok, err = pcall(function()
 		S.ticks = S.ticks + 1
 		local now = S.ticks * TICK_MS / 1000
@@ -247,9 +248,69 @@ do
 	log("read-back of probe.log: " .. tostring(size) .. " bytes")
 end
 
-local ok, err = pcall(function()
-	S.battle = empire_battle:new()
-	S.battle:register_repeating_timer("S2AI_Tick", TICK_MS)
-	S.battle:register_battle_phase_handler("S2AI_Phase")
-end)
-log(ok and "battle object created, timer + phase handler registered" or ("START ERROR: " .. tostring(err)))
+do
+	-- what does this Lua state contain at load time?
+	local names = {}
+	for k, v in pairs(_G) do names[#names + 1] = tostring(k) .. ":" .. type(v) end
+	table.sort(names)
+	log("GLOBALS (" .. #names .. "): " .. table.concat(names, " "))
+end
+
+-- The first probe showed battle_scripted.lua runs once (probably at game start), before any battle exists,
+-- so empire_battle is nil then. Start as soon as it appears: try at load, and again on every game event.
+local function try_start(reason)
+	if S.battle or empire_battle == nil then return end
+	local ok, err = pcall(function()
+		S.battle = empire_battle:new()
+		S.battle:register_repeating_timer("S2AI_Tick", TICK_MS)
+		S.battle:register_battle_phase_handler("S2AI_Phase")
+	end)
+	if ok then
+		log("battle object created (" .. reason .. "), timer + phase handler registered")
+	else
+		log("START ERROR (" .. reason .. "): " .. tostring(err))
+		S.battle = nil
+		S.start_failed = (S.start_failed or 0) + 1
+	end
+end
+
+local function reset(reason)
+	log("reset: " .. reason)
+	S.battle, S.ticks, S.phase, S.deployed_at, S.test, S.api_dumped, S.tick_error_logged = nil, 0, "?", nil, nil, nil, nil
+end
+
+S.events_seen = S.events_seen or {}
+local function on_event(name, context)
+	local seen = S.events_seen
+	seen[name] = (seen[name] or 0) + 1
+	if seen[name] <= 2 then
+		log(string.format("event %s #%d empire_battle=%s context=[%s]", name, seen[name], type(empire_battle),
+			context ~= nil and method_names(context) or "nil"))
+	end
+	if (S.start_failed or 0) < 3 then try_start("event " .. name) end
+	if name == "BattleConflictPhaseCommenced" and S.battle and not S.deployed_at then
+		S.deployed_at = S.ticks * TICK_MS / 1000
+		log("deployment over (BattleConflictPhaseCommenced, tick " .. S.ticks .. ")")
+	elseif name == "BattleCompleted" then
+		reset("BattleCompleted")
+	end
+end
+
+if type(events) == "table" then
+	local n = 0
+	for name, list in pairs(events) do
+		if type(list) == "table" then
+			n = n + 1
+			local event_name = tostring(name)
+			list[#list + 1] = function(context)
+				local ok, err = pcall(on_event, event_name, context)
+				if not ok then log("EVENT ERROR " .. event_name .. ": " .. tostring(err)) end
+			end
+		end
+	end
+	log("hooked " .. n .. " game events")
+else
+	log("no global 'events' table to hook (type " .. type(events) .. ")")
+end
+
+try_start("load")
