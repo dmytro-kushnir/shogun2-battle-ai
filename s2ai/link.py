@@ -73,6 +73,13 @@ class GameLink:
             self._pos, self._partial = 0, ""
             self.battle = None
         path = self.runtime / f"battle-{bid}.jsonl"
+        if self.battle is None and self._pos == 0:
+            # a battle left mid-way never sends battle_end: do not attach to a stream that went quiet
+            try:
+                if time.time() - path.stat().st_mtime > 30:
+                    return []
+            except OSError:
+                return []
         try:
             with path.open("rb") as f:
                 f.seek(self._pos)
