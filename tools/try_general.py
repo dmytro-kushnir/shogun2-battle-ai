@@ -37,19 +37,7 @@ for m in msgs:
     if m["type"] == "units":
         static.update({u["id"]: u for u in m["units"]})
 
-# buildings: the current format, or the first siege recording's discovery format
-buildings = None
-bmsg = next((m for m in msgs if m["type"] == "buildings"), None)
-if bmsg and "buildings" in bmsg:
-    buildings = {b["id"]: b for b in bmsg["buildings"]}
-elif bmsg and isinstance(bmsg.get("data"), dict):
-    buildings = {}
-    for it in bmsg["data"].get("items", []):
-        p, owner = it.get("position") or {}, it.get("alliance_owner_id", -1)
-        name, cap = it.get("name", ""), it.get("capacity") or 0
-        buildings[it["i"]] = {"id": it["i"], "name": name, "x": p.get("x"), "y": p.get("y"), "z": p.get("z"),
-                              "cap": cap, "owner": owner + 1 if owner >= 0 else 0, "hp": it.get("health"),
-                              "mil": cap > 0 or owner >= 0 or report.building_kind(name) != "building"}
+buildings = report.buildings_from_message(next((m for m in msgs if m["type"] == "buildings"), None))
 
 text, units = report.build(static, state, ai, events, None, None, buildings)
 print(text)

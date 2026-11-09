@@ -92,6 +92,26 @@ def building_kind(name: str) -> str:
     return "building"
 
 
+def buildings_from_message(msg: dict | None) -> dict[int, dict] | None:
+    """The bridge's 'buildings' message -> {id: building}. Also reads the discovery format of the first siege
+    recording (data.items with alliance_owner_id 0-based, capacity, health, position {x, y, z})."""
+    if not msg:
+        return None
+    if "buildings" in msg:
+        return {b["id"]: b for b in msg["buildings"]}
+    data = msg.get("data")
+    if not isinstance(data, dict):
+        return None
+    out = {}
+    for it in data.get("items", []):
+        p, owner = it.get("position") or {}, it.get("alliance_owner_id", -1)
+        name, cap = it.get("name", ""), it.get("capacity") or 0
+        out[it["i"]] = {"id": it["i"], "name": name, "x": p.get("x"), "y": p.get("y"), "z": p.get("z"), "cap": cap,
+                        "owner": owner + 1 if owner >= 0 else 0, "hp": it.get("health"),
+                        "mil": cap > 0 or owner >= 0 or building_kind(name) != "building"}
+    return out
+
+
 def fortifications(buildings: dict[int, dict] | None) -> list[dict]:
     """Military buildings with a kind; houses and scenery left out."""
     if not buildings:

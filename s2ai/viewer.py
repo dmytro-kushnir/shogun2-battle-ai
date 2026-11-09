@@ -108,9 +108,10 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
                           "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
                           "missile": (u.get("range") or 0) > 0 and (u.get("ammo0") or 0) > 0,
                           "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0")}
+    from .report import buildings_from_message
     from .server import map_buildings
-    bmsg = next((m for m in msgs if m["type"] == "buildings" and "buildings" in m), None)
-    buildings = map_buildings({b["id"]: b for b in bmsg["buildings"]}, ai) if bmsg else []
+    bmsg = next((m for m in msgs if m["type"] == "buildings"), None)
+    buildings = map_buildings(buildings_from_message(bmsg), ai)
     frames, events, bstates, last_t = [], [], [], -1.0
     for m in msgs:
         if m["type"] == "state" and m.get("buildings"):
