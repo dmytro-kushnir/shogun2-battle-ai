@@ -1,0 +1,8 @@
+runtime/
+logs/
+.venv/
+__pycache__/
+*.pyc
+# never commit game files
+*.pack
+data/
