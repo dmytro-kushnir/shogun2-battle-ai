@@ -134,10 +134,23 @@ end
 local function write_snapshot()
 	local units = {}
 	each_unit(function(a, r, u, unit) units[#units + 1] = unit_record(a, r, u, unit) end)
+	-- build the line first: in run 6 the file was created but stayed empty (an error inside json() was swallowed)
+	local ok, line = pcall(json, { t = S.ticks, clock = os.clock(), phase = S.phase, units = units })
+	if not ok then
+		if not S.snapshot_error_logged then
+			S.snapshot_error_logged = true
+			log("SNAPSHOT ERROR: " .. tostring(line) .. " | first unit: " .. (units[1] and (function()
+				local parts = {}
+				for k, v in pairs(units[1]) do parts[#parts + 1] = tostring(k) .. "=" .. type(v) .. ":" .. tostring(v) end
+				return table.concat(parts, " ")
+			end)() or "none"))
+		end
+		return
+	end
 	pcall(function()
 		local f = io.open(STATE_PATH, "a")
 		if f then
-			f:write(json({ t = S.ticks, clock = os.clock(), phase = S.phase, units = units }), "\n")
+			f:write(line, "\n")
 			f:close()
 		end
 	end)
@@ -373,6 +386,11 @@ local function dump_ui_state()
 		end
 		table.sort(names)
 		log("REGISTRY string keys (" .. #names .. "): " .. table.concat(names, " "))
+		-- in this engine the class metatable IS the method table (run 6: methods showed up as mt.*)
+		for _, cls in ipairs({ "UIBattleSetup", "UIHistoricBattleSetup", "UIComponent", "UIPrefsInterface",
+			"Pointer<EVENT>", "UISelectionManager", "UICardManager" }) do
+			log("CLASS " .. cls .. ": " .. keys_of(reg[cls], 300))
+		end
 	end
 end
 
@@ -440,9 +458,9 @@ else
 	log("no global 'events' table to hook (type " .. type(events) .. ")")
 end
 
-if ENV == "ui" then
+do -- both states: the battle-script state's registry may hold more classes
 	local ok, err = pcall(dump_ui_state)
-	if not ok then log("UI DUMP ERROR: " .. tostring(err)) end
+	if not ok then log("STATE DUMP ERROR: " .. tostring(err)) end
 end
 
 try_start("load")
