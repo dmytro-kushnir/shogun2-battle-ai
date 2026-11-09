@@ -177,11 +177,21 @@ end
 
 -- ---------------------------------------------------------------- control test
 -- Takes a WHOLE army away from the game's AI, sends every unit 60 m east, and gives them back after
--- CONTROL_TEST_LENGTH_S - easy to see in game. Alliance 1 army 1 is Ishida Mitsunari's army at Sekigahara
--- (the player commands Tokugawa, alliance 2).
-local CONTROL_TEST_ALLIANCE = 1
+-- CONTROL_TEST_LENGTH_S - easy to see in game. At Sekigahara the player commands Ishida Mitsunari (alliance 1),
+-- so alliance 2 army 1 is Tokugawa Ieyasu's army, the enemy.
+local CONTROL_TEST_ALLIANCE = 2
 
-local NO_PHASE_FALLBACK_S = 60 -- a historical battle's own script may replace our phase handler
+-- The battle-script state may not be able to write files. Its advisor messages, though, raise AdviceIssued /
+-- AdviceSuperseded events in the UI state, where the probe logs them (ENV "ui"). So the battle side can report
+-- through the advisor: the key carries the diagnostics.
+local function signal(text)
+	log("SIGNAL " .. text)
+	if S.battle then
+		pcall(function() S.battle:show_advisor_message("S2AI " .. text, "S2AI " .. text) end)
+	end
+end
+
+local NO_PHASE_FALLBACK_S = 30 -- a historical battle's own script may replace our phase handler
 
 local function control_test(now)
 	if not S.deployed_at and S.phase == "?" and now >= NO_PHASE_FALLBACK_S then
@@ -222,6 +232,8 @@ local function control_test(now)
 		local p = unit:position()
 		log(string.format("CONTROL TEST start: alliance %d army 1 (%d units): add_units ok %d %s; take_control=%s %s; goto sent to %d units",
 			CONTROL_TEST_ALLIANCE, units:count(), added, table.concat(errors, "; "), tostring(ok2), tostring(e2 or ""), sent))
+		signal(string.format("control_test units=%d added=%d take_control=%s goto_sent=%d", units:count(), added,
+			tostring(ok2), sent))
 		S.test = { uc = uc, unit = unit, started = now, x0 = p:get_x(), z0 = p:get_z() }
 	elseif t and not t.done then
 		local p = t.unit:position()
@@ -306,6 +318,8 @@ local function try_start(reason)
 	end)
 	if ok then
 		log("battle object created (" .. reason .. "), timer + phase handler registered")
+		signal(string.format("loaded env=%s io=%s os=%s dofile=%s alliances=%s", ENV, type(io), type(os), type(dofile),
+			tostring(call(S.battle:alliances(), "count"))))
 	else
 		log("START ERROR (" .. reason .. "): " .. tostring(err))
 		S.battle = nil
@@ -385,7 +399,8 @@ S.events_seen = S.events_seen or {}
 local function on_event(name, context)
 	local seen = S.events_seen
 	seen[name] = (seen[name] or 0) + 1
-	if seen[name] <= 2 then
+	-- advice events may carry the battle side's signal: log all of them
+	if seen[name] <= 2 or name:find("^Advice") then
 		log(string.format("event %s #%d empire_battle=%s %s", name, seen[name], type(empire_battle),
 			describe_context(context)))
 	end
