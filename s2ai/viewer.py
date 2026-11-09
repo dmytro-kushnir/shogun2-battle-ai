@@ -1,16 +1,25 @@
-"""Live tactical map in the browser: http://127.0.0.1:8765
+"""Battle map in the browser: live view of the battle being fought, and replays of past battles.
 
-The server loop calls `board.update(...)`; the page (viewer.html) polls /data twice a second and draws the
-units, the plan's lines and targets, the orders just sent, and the general's intent and reasoning.
+    live:     the server loop calls board.update(...); the page polls /data twice a second
+    history:  /battles lists runtime/battle-*.jsonl; /replay?id=<battle> returns the whole battle (positions every
+              second, plans with the report the general saw, orders sent, events) for the timeline view
+
+Listens on all interfaces by default so other devices on the local network can open it (read-only).
 """
 from __future__ import annotations
 
 import json
+import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from .link import RUNTIME
 
 PAGE = Path(__file__).with_name("viewer.html")
+GENERAL_RE = re.compile(r"(^|_)Gen(_|$)|General|Bodyguard|Daimyo")
 
 
 class Board:
@@ -33,14 +42,114 @@ class Board:
             return json.dumps({**self.data, "log": self.log}).encode()
 
 
-def serve(board: Board, port: int = 8765) -> ThreadingHTTPServer:
+# ---------------------------------------------------------------- history
+
+def _read_jsonl(path: Path) -> list[dict]:
+    out = []
+    try:
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except OSError:
+        pass
+    return out
+
+
+def battles(runtime: Path = RUNTIME) -> list[dict]:
+    out = []
+    for p in sorted(runtime.glob("battle-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+        bid = p.stem[len("battle-"):]
+        plans = runtime / f"plans-{bid}.jsonl"
+        n_plans = sum(1 for _ in plans.open(encoding="utf-8")) if plans.exists() else 0
+        out.append({"id": bid, "size_kb": round(p.stat().st_size / 1024), "plans": n_plans})
+    return out
+
+
+_cache: dict[str, tuple[float, bytes]] = {}
+
+
+def replay(bid: str, runtime: Path = RUNTIME) -> bytes:
+    if not re.fullmatch(r"[0-9-]+", bid):
+        raise FileNotFoundError(bid)
+    path = runtime / f"battle-{bid}.jsonl"
+    mtime = path.stat().st_mtime
+    hit = _cache.get(bid)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    msgs = _read_jsonl(path)
+    start = next(m for m in msgs if m["type"] == "battle_start")
+    meta = {}
+    meta_path = runtime / f"meta-{bid}.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if "ai" not in meta:
+        from .server import guess_ai_alliance
+        meta["ai"] = guess_ai_alliance(start)
+    ai = meta["ai"]
+    units = {}
+    for u in start["units"]:
+        t = u.get("type") or "?"
+        units[u["id"]] = {"ai": u["alliance"] == ai, "type": t,
+                          "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
+                          "missile": (u.get("range") or 0) > 0 and (u.get("ammo0") or 0) > 0,
+                          "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0")}
+    frames, events, last_t = [], [], -1.0
+    for m in msgs:
+        if m["type"] == "state":
+            if m["t"] - last_t < 0.99:  # one frame per second is plenty for a replay
+                continue
+            last_t = m["t"]
+            frames.append({"t": m["t"], "phase": m.get("phase"), "u": [
+                [u["id"], round(u["x"], 1), round(u["y"], 1), round(u.get("h") or 0), round(u.get("w") or 0, 1),
+                 u.get("men") or 0, (1 if u.get("rout") or u.get("shat") else 0) | (2 if u.get("ctl") else 0)]
+                for u in m["units"] if u.get("x") is not None and not u.get("gone")]})
+        elif m["type"] == "event" and m.get("name") != "BattleUnitAttacksEnemyUnit":
+            events.append({"t": m.get("tick", 0) * 0.5, "name": m.get("name")})
+    plans = [{"t": p["t"], "asked_t": p.get("asked_t"), "plan": p["plan"], "info": p.get("info"),
+              "problems": p.get("problems"), "report": p.get("report")}
+             for p in _read_jsonl(runtime / f"plans-{bid}.jsonl")]
+    orders = _read_jsonl(runtime / f"orders-{bid}.jsonl")
+    body = json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
+                       "plans": plans, "orders": orders, "general": meta.get("general")}).encode()
+    _cache[bid] = (mtime, body)
+    return body
+
+
+# ---------------------------------------------------------------- http
+
+def lan_addresses() -> list[str]:
+    addrs = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                addrs.add(ip)
+    except OSError:
+        pass
+    return sorted(addrs)
+
+
+def serve(board: Board, port: int = 8765, host: str = "0.0.0.0") -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path.startswith("/data"):
-                body, ctype = board.snapshot(), "application/json"
-            elif self.path in ("/", "/index.html"):
-                body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
-            else:
+            url = urlparse(self.path)
+            try:
+                if url.path == "/data":
+                    body, ctype = board.snapshot(), "application/json"
+                elif url.path == "/battles":
+                    body, ctype = json.dumps(battles()).encode(), "application/json"
+                elif url.path == "/replay":
+                    body, ctype = replay(parse_qs(url.query).get("id", [""])[0]), "application/json"
+                elif url.path in ("/", "/index.html"):
+                    body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
+                else:
+                    self.send_error(404)
+                    return
+            except (FileNotFoundError, StopIteration, OSError):
                 self.send_error(404)
                 return
             self.send_response(200)
@@ -52,6 +161,6 @@ def serve(board: Board, port: int = 8765) -> ThreadingHTTPServer:
         def log_message(self, *args):  # quiet
             pass
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd

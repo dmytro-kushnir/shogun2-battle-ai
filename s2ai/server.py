@@ -23,7 +23,7 @@ from . import report
 from .executor import Executor
 from .link import GameLink
 from .plan import validate
-from .viewer import Board, serve
+from .viewer import Board, lan_addresses, serve
 
 log = logging.getLogger("s2ai")
 
@@ -152,14 +152,19 @@ def main() -> None:
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--ai-alliance", type=int, help="alliance index (1-based) the server commands")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="interface for the map (default: all, so the local network can open it; 127.0.0.1 = this PC only)")
     ap.add_argument("--no-browser", action="store_true", help="do not open the live map")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
     board = Board()
-    serve(board, args.port)
+    serve(board, args.port, args.host)
     url = f"http://127.0.0.1:{args.port}"
-    log.info("live map: %s", url)
+    log.info("battle map: %s", url)
+    if args.host != "127.0.0.1":
+        for ip in lan_addresses():
+            log.info("battle map on the local network: http://%s:%d", ip, args.port)
     if not args.no_browser:
         webbrowser.open(url)
 
@@ -191,8 +196,10 @@ def main() -> None:
                 armies = ", ".join(f"a{a['alliance']}/{a['army']}: {a['units']} units hcp {a['handicap']}"
                                    for a in msg["armies"])
                 log.info("battle %s: %d units [%s]; commanding alliance %d", b.id, len(msg["units"]), armies, ai)
-                board.update(battle=b.id, ai=ai, plan=None, plans=0, orders=[],
-                             general=general.describe() if general else "demo commander")
+                desc = general.describe() if general else "demo commander"
+                board.update(battle=b.id, ai=ai, plan=None, plans=0, orders=[], general=desc)
+                # for the history view: which side we commanded, and with what
+                (link.runtime / f"meta-{b.id}.json").write_text(json.dumps({"ai": ai, "general": desc}))
                 board.note(f"battle {b.id} started, commanding alliance {ai}")
             elif kind == "event" and msg.get("name") != "BattleUnitAttacksEnemyUnit":  # too chatty to log
                 log.info("event %s%s", msg.get("name"), f" -> phase {msg['phase']}" if "phase" in msg else "")
@@ -216,6 +223,8 @@ def main() -> None:
                         last_write = now
                         if orders:
                             board.update(orders=orders)
+                            with (link.runtime / f"orders-{b.id}.jsonl").open("a", encoding="utf-8") as f:
+                                f.write(json.dumps({"t": b.state["t"], "orders": orders}) + "\n")
                     elif take and now - last_write > HEARTBEAT_S:
                         link.heartbeat(take)
                         last_write = now
@@ -225,6 +234,7 @@ def main() -> None:
                 units = report.merge(b.static, b.state)
                 board.update(t=b.state["t"], phase=b.phase, units=[
                     {"id": u.id, "x": round(u.x, 1), "y": round(u.y, 1), "h": round(u.h), "w": u.w, "men": u.men,
+                     "men0": u.men0, "type": u.type,
                      "ai": u.alliance == ai, "kind": u.kind, "missile": u.missile, "gen": u.general,
                      "rout": u.routing or u.shattered, "ctl": u.id in take}
                     for u in units if u.alive])
