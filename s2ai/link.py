@@ -22,9 +22,16 @@ def to_lua(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
+        if isinstance(v, float) and (v != v or abs(v) > 1e15):
+            return "nil"  # nan / inf have no Lua 5.1 literal
         return repr(round(v, 3) if isinstance(v, float) else v)
     if isinstance(v, str):
-        return json.dumps(v)  # JSON string escapes are valid Lua for our ASCII content
+        # Lua 5.1 has no \u escape: write the UTF-8 bytes, escaping anything not plain printable ASCII as \ddd
+        out = []
+        for b in v.encode("utf-8"):
+            ch = chr(b)
+            out.append(ch if 32 <= b < 127 and ch not in '"\\' else f"\\{b:03d}")
+        return '"' + "".join(out) + '"'
     if isinstance(v, (list, tuple)):
         return "{" + ", ".join(to_lua(x) for x in v) + "}"
     if isinstance(v, dict):
@@ -55,6 +62,7 @@ class GameLink:
         self._pos = 0
         self._partial = ""
         self._seq = 0
+        self._last_orders: list[dict] = []
 
     # ---------------------------------------------------------------- reading
 
@@ -151,5 +159,3 @@ class GameLink:
             except PermissionError:
                 time.sleep(0.02)
         raise PermissionError("orders.lua stayed locked for 0.4 s")
-
-    _last_orders: list = []

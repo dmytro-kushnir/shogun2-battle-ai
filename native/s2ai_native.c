@@ -11,7 +11,8 @@
  *       stub: lea rdx,[rsi+disp] ; cmp word [rdx],0 ; jne done ; mov rdx,&g_fake ; done: ret
  *   so a battle with a script keeps it, and an empty path becomes ours. The path copy (0x199df0) only reads
  *   the wchar_t* at +0x18 of the engine string, so g_fake only needs that pointer.
- * Nothing is written unless both signatures match exactly once and every expected byte is in place.
+ * Nothing is written unless both signatures match exactly once and every expected byte is in place. The patch
+ * lives in memory only and lasts until the game exits; the engine files on disk are never touched.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -25,7 +26,7 @@
 #define EXPORT __declspec(dllexport)
 
 static wchar_t g_repo[MAX_PATH];
-static wchar_t g_script[260] = L"data/s2ai/custom.battle_script";
+static const wchar_t g_script[] = L"data/s2ai/custom.battle_script"; /* shipped in s2ai_battle.pack */
 
 /* engine wide string: {u64 len; u64 cap; Alloc* alloc; wchar_t* data} */
 typedef struct { uint64_t len, cap; void *alloc; const wchar_t *data; } ENGINE_WSTR;
@@ -55,21 +56,6 @@ static void find_repo(void) {
         wchar_t *slash = wcsrchr(g_repo, L'\\');
         if (slash) *slash = 0;
     }
-}
-
-/* optional override of the script path: <repo>\runtime\native_script.txt (one ASCII line) */
-static void read_script_override(void) {
-    wchar_t path[MAX_PATH + 40];
-    _snwprintf(path, MAX_PATH + 40, L"%ls\\runtime\\native_script.txt", g_repo);
-    FILE *f = _wfopen(path, L"r");
-    if (!f) return;
-    char line[256] = {0};
-    if (fgets(line, sizeof line, f)) {
-        size_t n = strcspn(line, "\r\n");
-        line[n] = 0;
-        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, line, -1, g_script, 260);
-    }
-    fclose(f);
 }
 
 /* ------------------------------------------------------------------ engine module + signatures */
@@ -171,7 +157,6 @@ static void patch(void) {
     int64_t rel = (int64_t)(stub - (p2 + 5));
     if (rel > INT32_MAX || rel < INT32_MIN) { logf_("stub out of rel32 range - nothing patched"); return; }
 
-    read_script_override();
     g_fake.len = g_fake.cap = wcslen(g_script);
     g_fake.alloc = NULL;
     g_fake.data = g_script;
@@ -185,6 +170,12 @@ static void patch(void) {
     uint64_t fake = (uint64_t)(uintptr_t)&g_fake; memcpy(s + n, &fake, 8); n += 8;
     s[n++] = 0xC3;                                                  /* done: ret */
     memcpy(stub, s, n);
+    DWORD old;
+    if (!VirtualProtect(stub, 4096, PAGE_EXECUTE_READ, &old)) {  /* no writable+executable page left behind */
+        VirtualFree(stub, 0, MEM_RELEASE);
+        logf_("could not make the stub read-only - nothing patched");
+        return;
+    }
     FlushInstructionCache(GetCurrentProcess(), stub, n);
 
     uint8_t call5[7] = { 0xE8, 0, 0, 0, 0, 0x66, 0x90 };
@@ -199,38 +190,12 @@ static void patch(void) {
     logf_("PATCHED: battles without a script now load '%s' (stub %p)", script, (void *)stub);
 }
 
-/* committed, readable memory (no SEH with the MinGW target) */
-static int readable(const void *p, size_t n) {
-    MEMORY_BASIC_INFORMATION mbi;
-    if (!p || !VirtualQuery(p, &mbi, sizeof mbi)) return 0;
-    if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return 0;
-    return (const uint8_t *)p + n <= (const uint8_t *)mbi.BaseAddress + mbi.RegionSize;
-}
-
-/* ------------------------------------------------------------------ exports (lua_CFunctions) */
+/* ------------------------------------------------------------------ export (a lua_CFunction) */
 
 EXPORT int luaopen_s2ai_native(void *L) {
     (void)L;
     if (!g_repo[0]) find_repo();
     patch();
-    return 0;
-}
-
-/* log the script path of the battle being fought: global script object (RVA 0x2ebe330) -> +0x760 engine string */
-EXPORT int s2ai_report(void *L) {
-    (void)L;
-    if (!g_repo[0]) find_repo();
-    if (!g_base && !find_engine()) { logf_("report: engine not found"); return 0; }
-    uint8_t *obj = *(uint8_t **)(g_base + 0x2ebe330);
-    if (!obj) { logf_("report: no battle script object"); return 0; }
-    ENGINE_WSTR *path = (ENGINE_WSTR *)(obj + 0x760);
-    if (!readable(path, sizeof *path) || !readable(path->data, 2)) {
-        logf_("report: script object %p not readable as expected", (void *)obj);
-        return 0;
-    }
-    char buf[520] = {0};
-    WideCharToMultiByte(CP_UTF8, 0, path->data, -1, buf, sizeof buf - 1, NULL, NULL);
-    logf_("report: battle script object %p, path len=%llu '%s'", (void *)obj, (unsigned long long)path->len, buf);
     return 0;
 }
 

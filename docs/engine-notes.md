@@ -55,7 +55,7 @@ Every site below has the same bytes in both DLLs, and the signatures match once 
 
 ## Proposed intervention (a): substitute a path when empty (recommended)
 
-Two patches in .text (VirtualProtect → write → restore → FlushInstructionCache), plus a 24-byte stub that must be within ±2 GB of the module. To place the stub, VirtualAlloc a page near ImageBase (try `base - k*64KB` downward), the way MinHook does. The largest int3 runs in .text are only 21 bytes, so there is no handy in-module cave.
+Two patches in .text (VirtualProtect → write → restore → FlushInstructionCache), plus a 24-byte stub that must be within ±2 GB of the module. The stub goes on a page VirtualAlloc'd near ImageBase (`native/s2ai_native.c` tries 64 KB steps on both sides), made execute-read once written. The largest int3 runs in .text are only 21 bytes, so there is no handy in-module cave. **This is what the mod implements** (`native/s2ai_native.c`); it was confirmed in game: custom battles then run `data/s2ai/custom.battle_script`.
 
 | # | RVA | original | patched | meaning |
 |---|-----|----------|---------|---------|
@@ -70,7 +70,7 @@ Stub (it clobbers only rdx and the flags, which are dead here; it does not touch
 48 BA <imm64>            mov  rdx, &g_fake_wstr
 C3               done:   ret
 ```
-`g_fake_wstr` is 0x20 bytes in our DLL: `{len, len, base+0x2e41a00, L"data/…/our_script.lua"}`. `0x199df0` only reads `+0x18` (a NUL-terminated `wchar_t*`), so only the data pointer must be valid. Battles that already have a script (historical) are unchanged.
+`g_fake_wstr` is 0x20 bytes in our DLL: `{len, len, NULL, L"data/s2ai/custom.battle_script"}`. `0x199df0` only reads `+0x18` (a NUL-terminated `wchar_t*`; checked by disassembly), so only the data pointer must be valid. Battles that already have a script (historical) are unchanged.
 
 Signatures (each matches exactly once in both DLLs):
 - P1: `80 BE ?? ?? ?? ?? 00 75 ?? 66 83 BE ?? ?? ?? ?? 00 76 ?? B9 30 09 00 00 E8` (+0x11 = the jbe)
@@ -94,10 +94,11 @@ The ticking then happens automatically. However, no global battle-env pointer wa
 ## (c) Registering the classes into battle_scripted.lua: not viable alone
 `0x2bfec0(L)` would register the classes. However, the bindings dereference the singleton with no null check, for example `0x297840`: `mov rax,[0x2ebe330]; mov rcx,[rax+0x748]`. Without a BattleScriptInterface they crash.
 
-## Unknowns / to verify at runtime
-- **Path format** given to the filesystem. Engine literals use `data/...` (`data/battle_scripted.lua`, `data/TestData/world/DemoLandBattle.xml`), so try `L"data/<dir>/<file>.lua"` first. If it fails, try it without `data/`. You can check what a historical battle produces by reading `obj+0x760` (or `env+0x28128`) at runtime.
-- Meaning of `env+0x283c8` (copied in `0x345840` from a battle-start parameter struct). It is probably replay or multiplayer, but this is unconfirmed. If it is set for campaign battles, P1 alone will not help; check at runtime.
-- Whether custom and campaign battles reach this path at all: they should, because `battle_scripted.lua` is created in the same function a few hundred instructions earlier.
+## Settled in game
+- **Path format:** `data/s2ai/custom.battle_script` (as a pack entry `s2ai\custom.battle_script`) works.
+- **Custom battles** reach this path and run the script; several custom battles were played with no side effects seen.
+
+## Still open
+- Meaning of `env+0x283c8` (copied in `0x345840` from a battle-start parameter struct). It is probably replay or multiplayer, but this is unconfirmed. If it is set for campaign battles, P1 alone will not help; if it is NOT set for multiplayer, multiplayer battles get the script too (see the README's multiplayer warning).
 - Side effects of a script existing in non-scripted battles (`prepare_for_fade_in` stays at its default; script-only UI flows), and singleton lifetime on battle exit (the destructor was not analysed).
-- Run order: the battle-script chunk runs on the first env update tick (`0x420cb0`), which is after battle_scripted.lua was created. The exact ordering against battle_scripted.lua's own execution was not checked.
 - The debug tweak "Saves battle xml to logs/battle.xml" (string `0x2187150`) could dump a custom battle's setup for inspection.

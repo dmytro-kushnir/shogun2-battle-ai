@@ -133,9 +133,9 @@ function render() {
   $('intent').textContent = plan ? plan.intent : '–';
   $('reasoning').textContent = plan ? plan.reasoning : '–';
   $('groups').innerHTML = plan ? plan.groups.map(g =>
-    `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${g.task}${g.target ? ' ' + g.target : ''}` +
-    `${g.position ? ' @' + g.position.map(v => v.toFixed(0)).join(',') : ''}` +
-    `${g.engage_within_m ? ' · engage ' + g.engage_within_m + 'm' : ''}${g.keep_range_m ? ' · keep ' + g.keep_range_m + 'm' : ''}</li>`).join('') : '';
+    `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${esc(g.task)}${g.target ? ' ' + esc(g.target) : ''}` +
+    `${g.position ? ' @' + g.position.map(v => (+v).toFixed(0)).join(',') : ''}` +
+    `${g.engage_within_m ? ' · engage ' + esc(g.engage_within_m) + 'm' : ''}${g.keep_range_m ? ' · keep ' + esc(g.keep_range_m) + 'm' : ''}</li>`).join('') : '';
   if (view.report !== undefined) $('report').textContent = view.report || '–';
   $('log').textContent = view.log.join('\n');
 
@@ -200,7 +200,7 @@ function arrow([ax, ay], [bx, by], colr) {
   ctx.lineTo(bx - 8 * Math.cos(a - .4), by - 8 * Math.sin(a - .4)); ctx.lineTo(bx - 8 * Math.cos(a + .4), by - 8 * Math.sin(a + .4)); ctx.fill();
 }
 const getVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const esc = s => String(s).replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const pretty = t => String(t || '?').replace(/^(Genpei|Boshin|Sho|Mon|FotS|Shogun|Rok)_/, '').replace(/_/g, ' ');
 
 // unit class from the game's type key (e.g. Inf_Spear_Yari_Ashigaru, Cav_Missile_Bow_Ki, Gen_Tokugawa_Ieyasu)

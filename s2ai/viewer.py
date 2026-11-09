@@ -4,7 +4,7 @@
     history:  /battles lists runtime/battle-*.jsonl; /replay?id=<battle> returns the whole battle (positions every
               second, plans with the report the general saw, orders sent, events) for the timeline view
 
-Listens on all interfaces by default so other devices on the local network can open it (read-only).
+Listens on this PC only unless the server runs with --lan (then: all interfaces, read-only, no password).
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -69,17 +70,26 @@ def battles(runtime: Path = RUNTIME) -> list[dict]:
     return out
 
 
-_cache: dict[str, tuple[float, bytes]] = {}
+_cache: dict[str, tuple[float, float, bytes]] = {}  # battle -> (file mtime, built at, body)
+_build_lock = threading.Lock()
+LIVE_REBUILD_S = 10.0  # the battle in progress changes every 0.5 s: rebuild its replay at most this often
 
 
 def replay(bid: str, runtime: Path = RUNTIME) -> bytes:
     if not re.fullmatch(r"[0-9-]+", bid):
         raise FileNotFoundError(bid)
     path = runtime / f"battle-{bid}.jsonl"
-    mtime = path.stat().st_mtime
-    hit = _cache.get(bid)
-    if hit and hit[0] == mtime:
-        return hit[1]
+    with _build_lock:  # one build at a time, so map clients cannot pile up work on the server
+        mtime = path.stat().st_mtime
+        hit = _cache.get(bid)
+        if hit and (hit[0] == mtime or time.monotonic() - hit[1] < LIVE_REBUILD_S):
+            return hit[2]
+        body = _build_replay(bid, path, runtime)
+        _cache[bid] = (mtime, time.monotonic(), body)
+        return body
+
+
+def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
     msgs = _read_jsonl(path)
     start = next(m for m in msgs if m["type"] == "battle_start")
     meta = {}
@@ -113,10 +123,8 @@ def replay(bid: str, runtime: Path = RUNTIME) -> bytes:
               "problems": p.get("problems"), "report": p.get("report")}
              for p in _read_jsonl(runtime / f"plans-{bid}.jsonl")]
     orders = _read_jsonl(runtime / f"orders-{bid}.jsonl")
-    body = json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
+    return json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
                        "plans": plans, "orders": orders, "general": meta.get("general")}).encode()
-    _cache[bid] = (mtime, body)
-    return body
 
 
 # ---------------------------------------------------------------- http
@@ -133,9 +141,16 @@ def lan_addresses() -> list[str]:
     return sorted(addrs)
 
 
-def serve(board: Board, port: int = 8765, host: str = "0.0.0.0") -> ThreadingHTTPServer:
+def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str] | None = None) -> ThreadingHTTPServer:
+    # Only answer requests addressed to us by IP / localhost: a page on some other site cannot then read the map
+    # through a DNS name re-pointed at this machine (DNS rebinding).
+    allowed = {f"{h}:{port}" for h in ["127.0.0.1", "localhost", *(lan or [])]}
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.headers.get("Host", "") not in allowed:
+                self.send_error(403, "unexpected Host header")
+                return
             url = urlparse(self.path)
             try:
                 if url.path == "/data":

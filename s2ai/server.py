@@ -1,7 +1,7 @@
-﻿"""The AI server: follows the battle the game streams, decides for the AI side, writes orders back.
+"""The AI server: follows the battle the game streams, decides for the AI side, writes orders back.
 
     .venv\\Scripts\\python -m s2ai.server                      # the LLM general (Claude via your Claude Code login)
-    .venv\\Scripts\\python -m s2ai.server --model claude-opus-5-5 --effort medium
+    .venv\\Scripts\\python -m s2ai.server --model opus --effort medium
     .venv\\Scripts\\python -m s2ai.server --commander demo     # no model: every AI unit attacks the nearest enemy
     .venv\\Scripts\\python -m s2ai.server --ai-alliance 1      # which alliance is the AI's (default: guessed)
 
@@ -148,23 +148,23 @@ class GeneralCommander:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--commander", choices=["general", "demo"], default="general")
-    ap.add_argument("--model", default="claude-sonnet-5-5")
+    ap.add_argument("--model", default="sonnet")
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--ai-alliance", type=int, help="alliance index (1-based) the server commands")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--host", default="0.0.0.0",
-                    help="interface for the map (default: all, so the local network can open it; 127.0.0.1 = this PC only)")
+    ap.add_argument("--lan", action="store_true",
+                    help="let other devices on the local network open the map (read-only, no password)")
     ap.add_argument("--no-browser", action="store_true", help="do not open the live map")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
     board = Board()
-    serve(board, args.port, args.host)
+    lan = lan_addresses() if args.lan else []
+    serve(board, args.port, "0.0.0.0" if args.lan else "127.0.0.1", lan)
     url = f"http://127.0.0.1:{args.port}"
     log.info("battle map: %s", url)
-    if args.host != "127.0.0.1":
-        for ip in lan_addresses():
-            log.info("battle map on the local network: http://%s:%d", ip, args.port)
+    for ip in lan:
+        log.info("battle map on the local network: http://%s:%d", ip, args.port)
     if not args.no_browser:
         webbrowser.open(url)
 
@@ -214,7 +214,11 @@ def main() -> None:
         if b is not None and commander is not None and b.id == battle_id and not b.ended and b.state is not None:
             if b.state["tick"] != last_tick:
                 last_tick = b.state["tick"]
-                decision = commander.decide(b)
+                try:
+                    decision = commander.decide(b)
+                except Exception:  # noqa: BLE001 - a bad plan or state must not stop the server mid-battle
+                    log.exception("commander failed on tick %s", last_tick)
+                    decision = None
                 now = time.monotonic()
                 try:
                     if decision is not None and (decision[1] or decision[0] != take):

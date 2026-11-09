@@ -50,9 +50,15 @@ def validate(plan: dict, ours: set[int], enemies: set[int]) -> tuple[dict, list[
     problems: list[str] = []
     groups = []
     seen: set[int] = set()
-    for g in plan.get("groups", []):
+    if not isinstance(plan, dict):
+        plan = {}
+    raw_groups = plan.get("groups")
+    for g in raw_groups if isinstance(raw_groups, list) else []:
+        if not isinstance(g, dict):
+            continue
         units = []
-        for uid in g.get("units", []):
+        raw_units = g.get("units") if isinstance(g.get("units"), list) else []
+        for uid in (_int(u) for u in raw_units):
             if uid not in ours:
                 problems.append(f"group '{g.get('name')}': {uid} is not one of your units")
             elif uid in seen:
@@ -63,25 +69,43 @@ def validate(plan: dict, ours: set[int], enemies: set[int]) -> tuple[dict, list[
         if not units:
             continue
         task = g.get("task") if g.get("task") in TASKS else "hold"
-        target = g.get("target")
+        target = _int(g.get("target"))
         if task == "attack" and target not in enemies:
-            problems.append(f"group '{g.get('name')}': attack target {target} is not an enemy unit; holding")
-            task, target = "hold", None
+            problems.append(f"group '{g.get('name')}': attack target {g.get('target')} is not an enemy unit; holding")
+            task = "hold"
+        if task != "attack":
+            target = None
         pos = g.get("position")
-        if task == "move" and not (isinstance(pos, list) and len(pos) == 2):
+        pos = [_num(pos[0]), _num(pos[1])] if isinstance(pos, list) and len(pos) == 2 else None
+        if pos is not None and None in pos:
+            pos = None
+        if task == "move" and pos is None:
             problems.append(f"group '{g.get('name')}': move without a position; holding")
             task = "hold"
         groups.append({
-            "name": str(g.get("name") or "group"), "units": units, "task": task, "target": target,
-            "position": pos if isinstance(pos, list) and len(pos) == 2 else None,
-            "facing": g.get("facing"), "run": bool(g.get("run")),
-            "engage_within_m": max(0.0, float(g.get("engage_within_m") or 0)),
-            "keep_range_m": max(0.0, float(g.get("keep_range_m") or 0)),
+            "name": str(g.get("name") or "group")[:60], "units": units, "task": task, "target": target,
+            "position": pos, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
+            "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
+            "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),
         })
     clean = {
         "intent": str(plan.get("intent", ""))[:160],
-        "reasoning": str(plan.get("reasoning", "")),
+        "reasoning": str(plan.get("reasoning", ""))[:2000],
         "groups": groups,
-        "next_plan_in_s": min(30, max(4, int(plan.get("next_plan_in_s") or 8))),
+        "next_plan_in_s": int(min(30, max(4, _num(plan.get("next_plan_in_s")) or 8))),
     }
     return clean, problems
+
+
+# The text fallback in general.py bypasses the schema, so anything can arrive here: coerce, never raise.
+def _num(v) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) < 1e7 else None
+
+
+def _int(v) -> int | None:
+    f = _num(v)
+    return int(f) if f is not None and f == int(f) else None

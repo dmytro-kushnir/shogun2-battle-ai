@@ -22,7 +22,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("stream")
 ap.add_argument("--at", type=float, default=60.0, help="battle time (s) of the state to plan on")
 ap.add_argument("--ai", type=int)
-ap.add_argument("--model", default="claude-sonnet-5-5")
+ap.add_argument("--model", default="sonnet")
 ap.add_argument("--effort", default="low")
 args = ap.parse_args()
 

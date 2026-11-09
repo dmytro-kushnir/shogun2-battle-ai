@@ -21,6 +21,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path $PSScriptRoot -Parent
+# The game's Lua opens files and DLLs with ANSI paths: a folder name with non-ASCII letters (e.g. a Cyrillic user
+# name) would make every hook fail silently.
+if ($Repo -match '[^\x20-\x7E]') {
+    throw "The repository path '$Repo' contains non-ASCII characters, which the game cannot open. Move it to a plain ASCII path such as C:\Games\shogun2-battle-ai and run install.ps1 again."
+}
 $RepoLua = ($Repo -replace '\\', '/')
 $Marker = '-- shogun2-battle-ai loader'
 $PackName = 's2ai_battle.pack'
@@ -33,8 +38,6 @@ $Targets = @(
         'sekigahara\sekigahara_battle', 'nagashima\nagashima_battle') | ForEach-Object {
         @{ Path = "shogun_historical_battles\$_.battle_script"; Mode = 'prepend'; Script = 's2ai_bridge.lua' }
     })
-# written by earlier versions; removed on install and uninstall when they carry our marker
-$Legacy = @('battle_scripted.lua')
 
 function Find-DataDirs {
     $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
@@ -86,7 +89,6 @@ if (-not $DataDirs) { $DataDirs = @(Find-DataDirs) }
 if (-not $DataDirs) { throw 'No Shogun 2 Complete Edition data folder found through Steam; pass -DataDirs.' }
 
 foreach ($d in $DataDirs) {
-    foreach ($rel in $Legacy) { if (Test-Path (Join-Path $d $rel)) { Remove-Ours $d $rel } }
     if ($Uninstall) {
         $pack = Join-Path $d $PackName
         if (Test-Path $pack) { Remove-Item $pack; Write-Host "removed  $pack" }

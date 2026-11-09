@@ -199,14 +199,33 @@ local HANDLERS = {
 	withdraw = function(uc, o) uc:withdraw(o.run ~= false) end,
 }
 
+-- The orders file is a Lua table literal written by the server. It runs in an empty environment, as source
+-- text only (precompiled bytecode can escape a setfenv sandbox, so it is refused) and with an instruction budget
+-- (so a broken file cannot hang the battle).
+local ORDERS_MAX_BYTES = 1000000
+local ORDERS_MAX_INSTRUCTIONS = 2000000
+
 local function read_orders()
-	local chunk = loadfile(ORDERS_PATH)
+	local f = io.open(ORDERS_PATH, "rb")
+	if not f then return nil end
+	local text = f:read(ORDERS_MAX_BYTES + 1)
+	f:close()
+	if not text or #text > ORDERS_MAX_BYTES or text:byte(1) == 27 then return nil end
+	local chunk = loadstring(text, "=orders.lua")
 	if not chunk then return nil end
 	setfenv(chunk, {})
+	-- keep whatever hook the engine has installed (it ships a debugger hook) and put it back afterwards
+	local okg, old_fn, old_mask, old_count = pcall(debug.gethook)
+	local hooked = pcall(debug.sethook, function() error("orders file runs too long", 2) end, "",
+		ORDERS_MAX_INSTRUCTIONS)
 	local ok, t = pcall(chunk)
+	if hooked then
+		if okg and old_fn then pcall(debug.sethook, old_fn, old_mask, old_count) else pcall(debug.sethook) end
+	end
 	if ok and type(t) == "table" then return t end
 	return nil
 end
+B._read_orders = read_orders -- for tools/test_bridge.py
 
 local function apply_orders()
 	local t = read_orders()
@@ -219,7 +238,6 @@ local function apply_orders()
 		return
 	end
 	if t.written and os.time() - t.written > STALE_S then
-		-- run 12 released once 2 s after the first orders: log the clocks to see why
 		release_all(string.format("orders file is stale (server stopped?): os.time=%s written=%s seq=%s",
 			tostring(os.time()), tostring(t.written), tostring(t.seq)))
 		return

@@ -112,16 +112,14 @@ end
 def main() -> bool:
     problems = []
     with tempfile.TemporaryDirectory() as tmp:
-        runtime = pathlib.Path(tmp)
+        root = pathlib.Path(tmp)              # stands in for the repository: the bridge uses S2AI_ROOT/runtime
+        real_runtime = root / "runtime"
+        real_runtime.mkdir()
         rt = lua51.LuaRuntime()
         g = rt.globals()
         rt.execute(MOCK)
-        g.S2AI_ROOT = str(runtime.parent).replace("\\", "/")
-        # the bridge writes to S2AI_ROOT/runtime: point it at our temp dir
-        rt.execute(f'S2AI_ROOT = "{str(runtime.parent).replace(chr(92), "/")}"')
-        real_runtime = runtime.parent / "runtime"
-        real_runtime.mkdir(exist_ok=True)
-        try:
+        g.S2AI_ROOT = str(root).replace("\\", "/")
+        if True:
             g.dofile(str(REPO / "lua" / "s2ai_bridge.lua"))
             link = GameLink(runtime=real_runtime)
             if dict(g.MOCK_TIMERS.items()) != {"S2AI_Bridge_Tick": 500}:
@@ -170,9 +168,31 @@ def main() -> bool:
             log = (real_runtime / "bridge.log").read_text() if (real_runtime / "bridge.log").exists() else ""
             if "ERROR" in log:
                 problems.append("bridge.log has errors:\n" + log)
-        finally:
-            import shutil
-            shutil.rmtree(real_runtime, ignore_errors=True)
+
+            # hostile orders files: must be refused / cut off, never hang or run code
+            read_orders = g.S2AI_BRIDGE._read_orders
+            orders = real_runtime / "orders.lua"
+            cases = {
+                "endless loop": b"while true do end return {}",
+                "bytecode": None,  # written by Lua itself below (string.dump output is binary)
+                "reaches globals": b"return { leaked = os ~= nil or io ~= nil }",
+                "too big": b"return {}" + b" " * 1_100_000,
+            }
+            for name, body in cases.items():
+                if body is None:
+                    g.BYTECODE_PATH = str(orders)
+                    rt.execute('local f = io.open(BYTECODE_PATH, "wb") '
+                               'f:write(string.dump(function() return {} end)) f:close()')
+                else:
+                    orders.write_bytes(body)
+                result = read_orders()
+                if name == "reaches globals":
+                    if result is None or result["leaked"]:
+                        problems.append("orders file could reach globals")
+                elif result is not None:
+                    problems.append(f"orders file accepted: {name}")
+            print("hostile orders files: refused / sandboxed as expected" if not any(
+                p.startswith("orders file") for p in problems) else "hostile orders files: PROBLEM")
     for p in problems:
         print("FAIL:", p)
     print("\nALL OK" if not problems else "\nFAILED")

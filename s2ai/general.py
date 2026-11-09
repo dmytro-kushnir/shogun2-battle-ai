@@ -45,13 +45,19 @@ How to answer:
 
 
 def find_claude() -> str:
+    local = Path.home() / ".local" / "bin" / "claude.exe"  # where the native installer puts it
     found = shutil.which("claude")
+    if found and found.lower().endswith((".cmd", ".bat")):
+        # an npm install: a .cmd goes through cmd.exe, which mangles quotes in the JSON schema argument
+        if local.exists():
+            return str(local)
+        raise SystemExit(f"found {found} (an npm install of Claude Code); the general needs the native build: "
+                         "https://claude.com/claude-code (e.g. `irm https://claude.ai/install.ps1 | iex`)")
     if found:
         return found
-    local = Path.home() / ".local" / "bin" / "claude.exe"
     if local.exists():
         return str(local)
-    raise SystemExit("claude CLI not found - install Claude Code and log in (claude), or pass --claude PATH")
+    raise SystemExit("claude CLI not found - install Claude Code and log in (run `claude` once)")
 
 
 def system_prompt() -> str:
@@ -64,7 +70,7 @@ def system_prompt() -> str:
 
 
 class ClaudeCodeGeneral:
-    def __init__(self, model: str = "claude-sonnet-5-5", effort: str = "low", binary: str | None = None):
+    def __init__(self, model: str = "sonnet", effort: str = "low", binary: str | None = None):
         self.bin = binary or find_claude()
         self.model, self.effort = model, effort
         self.proc: subprocess.Popen | None = None
@@ -82,8 +88,12 @@ class ClaudeCodeGeneral:
         effort = ["--effort", self.effort]
         if "haiku" in self.model:  # no effort levels; thinking off keeps it fast
             env, effort = dict(os.environ, MAX_THINKING_TOKENS="0"), []
+        # the prompt goes through a file: rules.md + strategy.md grow, and command lines are limited on Windows
+        prompt_file = REPO / "runtime" / "system_prompt.txt"
+        prompt_file.parent.mkdir(exist_ok=True)
+        prompt_file.write_text(system_prompt(), encoding="utf-8")
         args = [self.bin, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--system-prompt", system_prompt(), "--model", self.model, *effort,
+                "--system-prompt-file", str(prompt_file), "--model", self.model, *effort,
                 "--json-schema", json.dumps(PLAN_SCHEMA), "--tools", "", "--no-session-persistence",
                 "--strict-mcp-config", "--setting-sources", ""]
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
