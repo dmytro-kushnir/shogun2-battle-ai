@@ -258,6 +258,10 @@ function S2AI_Tick()
 	local ok, err = pcall(function()
 		S.ticks = S.ticks + 1
 		local now = S.ticks * TICK_MS / 1000
+		if S.slowmo_until and now >= S.slowmo_until then
+			S.slowmo_until = nil
+			pcall(function() S.battle:restore_battle_speed() end)
+		end
 		dump_api_once()
 		write_snapshot()
 		control_test(now)
@@ -318,6 +322,12 @@ local function try_start(reason)
 	end)
 	if ok then
 		log("battle object created (" .. reason .. "), timer + phase handler registered")
+		-- unmistakable in-game marker that the battle-script side runs: half speed, back to normal after 20 s
+		if ENV == "battle" then
+			local slow_ok = pcall(function() S.battle:modify_battle_speed(0.5) end)
+			S.slowmo_until = slow_ok and 20 or nil
+			log("slow-motion marker: " .. tostring(slow_ok))
+		end
 		signal(string.format("loaded env=%s io=%s os=%s dofile=%s alliances=%s", ENV, type(io), type(os), type(dofile),
 			tostring(call(S.battle:alliances(), "count"))))
 	else

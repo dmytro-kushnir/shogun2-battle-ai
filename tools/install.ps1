@@ -73,8 +73,13 @@ end
 "@
 }
 
+$PackName = 's2ai_battle.pack'   # movie-type pack with the battle-env targets; the engine loads it by itself
+$Python = Join-Path $Repo '.venv\Scripts\python.exe'
+
 foreach ($d in $DataDirs) {
     if ($Uninstall) {
+        $pack = Join-Path $d $PackName
+        if (Test-Path $pack) { Remove-Item $pack; Write-Host "removed  $pack" }
         foreach ($t in $Targets) {
             $target = Join-Path $d $t.Path
             if ((Test-Path $target) -and (Select-String -Path $target -SimpleMatch $Marker -Quiet)) {
@@ -104,6 +109,16 @@ foreach ($d in $DataDirs) {
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         [IO.File]::WriteAllText($target, ($out -replace "`r?`n", "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
         Write-Host "installed $target"
+    }
+    # the same battle-env files once more, as a pack: loose files did not seem to reach the battle-script state
+    $packArgs = foreach ($t in $Targets | Where-Object { $_.Env -eq 'battle' }) {
+        $loose = Join-Path $d $t.Path
+        if (Test-Path $loose) { "$($t.Path)=$loose" }
+    }
+    if ($packArgs) {
+        & $Python (Join-Path $PSScriptRoot 's2pack.py') (Join-Path $d $PackName) @packArgs | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "s2pack.py failed for $d" }
+        Write-Host "installed $(Join-Path $d $PackName)"
     }
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

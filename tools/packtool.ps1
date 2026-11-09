@@ -44,7 +44,8 @@ foreach ($e in $entries) {
     "{0,9} {1,9}  {2}" -f $e.Size, $e.Stored, $e.Name
     if ($OutDir) {
       $fs.Position = $e.Offset; $raw = $br.ReadBytes($e.Stored)
-      if ($e.Stored -lt $e.Size) { $raw = [Lz4]::Decode($raw, $e.Size) }
+      # PFHs entries are LZ4 blocks; incompressible ones come out LARGER than the file, so decode on any mismatch
+      if ($e.Stored -ne $e.Size) { $raw = [Lz4]::Decode($raw, $e.Size) }
       $p = Join-Path $OutDir $e.Name; New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
       [IO.File]::WriteAllBytes($p, $raw)
     }
