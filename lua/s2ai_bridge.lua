@@ -164,12 +164,24 @@ end
 
 -- ------------------------------------------------------------------ control
 
+-- A unit controller must never be garbage-collected: its C++ destructor then runs while the engine tears the
+-- battle down (or after), touching units that are gone. That corrupted the heap; the game crashed on exit
+-- (0xc0000374) after every battle since the bridge stopped calling release_control at battle end. Every
+-- controller we ever create is therefore kept alive here for the rest of the game session.
+S2AI_CONTROLLER_GRAVEYARD = S2AI_CONTROLLER_GRAVEYARD or {}
+local GRAVEYARD = S2AI_CONTROLLER_GRAVEYARD
+
+local function bury(uc)
+	if uc then GRAVEYARD[#GRAVEYARD + 1] = uc end
+end
+
 local function take(id)
 	if B.controlled[id] then return B.controlled[id] end
 	local e = B.units[id]
 	if not e then return nil, "no unit " .. tostring(id) end
 	local ok, uc = pcall(function()
 		local c = e.army:create_unit_controller()
+		bury(c) -- alive for the whole session, whatever happens next (see GRAVEYARD)
 		c:add_units(e.unit)
 		c:take_control()
 		return c
@@ -192,6 +204,7 @@ end
 local function release(id)
 	local uc = B.controlled[id]
 	if uc and on_field(id) then pcall(function() uc:release_control() end) end
+	bury(uc)
 	B.controlled[id] = nil
 end
 
@@ -203,7 +216,7 @@ end
 
 local function forget_all(reason)
 	local n = 0
-	for _ in pairs(B.controlled) do n = n + 1 end
+	for _, uc in pairs(B.controlled) do n = n + 1; bury(uc) end
 	B.controlled = {}
 	if n > 0 then log("dropped " .. n .. " controllers without engine calls: " .. reason) end
 end
@@ -438,8 +451,16 @@ function scan_buildings() -- assigns the local declared at the top
 	local out, skipped = {}, 0
 	for i = 1, math.min(n, 1000) do
 		local b = call(list, "item", i)
-		if type(b) ~= "userdata" or getmetatable(b) ~= cls then
+		local mt = type(b) == "userdata" and getmetatable(b) or nil
+		-- the class table is either the object's metatable itself or what that metatable's __index points at
+		-- (run 15: none matched the first form)
+		local is_building = mt ~= nil and (mt == cls or (type(mt) == "table" and rawget(mt, "__index") == cls))
+		if not is_building then
 			skipped = skipped + 1
+			if skipped == 1 then
+				log(string.format("buildings: item %d skipped: type=%s mt=%s mt.__index=%s class=%s", i, type(b),
+					tostring(mt), tostring(type(mt) == "table" and rawget(mt, "__index") or nil), tostring(cls)))
+			end
 		else
 			local p = call(b, "position")
 			local name, cap, owner = call(b, "name"), num(call(b, "capacity")), owner_alliance(b)

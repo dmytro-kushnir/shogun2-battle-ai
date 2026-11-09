@@ -58,6 +58,7 @@ local function make_army(prefix, n, x0, handicap)
         units = function() return list(units) end,
         army_handicap = function() return handicap end,
         create_unit_controller = function()
+            MOCK_CONTROLLERS = (MOCK_CONTROLLERS or 0) + 1
             local mine = {}
             local function each(fn) for _, u in ipairs(mine) do fn(u) end end
             return obj({
@@ -227,6 +228,10 @@ def main() -> bool:
             g.MOCK_FIRE("BattleCompleted")
             link.poll()
             tick()  # the timer may still fire once after the battle: must not touch the engine
+            # no controller may ever be garbage-collected (its destructor corrupted the game's heap at exit)
+            kept = len(g.S2AI_CONTROLLER_GRAVEYARD)
+            if kept < g.MOCK_CONTROLLERS:
+                problems.append(f"{g.MOCK_CONTROLLERS} controllers created but only {kept} kept alive")
             if g.MOCK_LATE_RELEASES:
                 problems.append(f"release_control called {g.MOCK_LATE_RELEASES}x after the battle ended "
                                 "(crashed the real game)")

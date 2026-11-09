@@ -168,8 +168,33 @@ function render() {
 
   const col = {ai: getVar('--ai'), pl: getVar('--pl'), plan: getVar('--plan')};
   // buildings under everything else: scenery as faint dots, fortifications as squares by kind and owner
-  const SIZE = {wall: 9, tower: 13, gate: 15, keep: 24, building: 9};
+  const SIZE = {wall: 6, tower: 13, gate: 15, keep: 24, building: 9};
   const sideCol = sd => sd === 'ai' ? col.ai : sd === 'pl' ? col.pl : '#7a7568';
+  // wall lines: the game gives each wall section, tower and gate as a point. Per castle level (altitude),
+  // order the pieces around the level's centre and join neighbours: that redraws the defensive ring.
+  const ringPieces = (view.buildings || []).filter(b => ['wall', 'tower', 'gate'].includes(b.kind));
+  const levels = {};
+  for (const b of ringPieces) { const k = Math.round((b.z || 0) / 4); (levels[k] = levels[k] || []).push(b); }
+  for (const pieces of Object.values(levels)) {
+    if (pieces.length < 3) continue;
+    const mx = pieces.reduce((a, b) => a + b.x, 0) / pieces.length, my = pieces.reduce((a, b) => a + b.y, 0) / pieces.length;
+    pieces.sort((a, b) => Math.atan2(a.y - my, a.x - mx) - Math.atan2(b.y - my, b.x - mx));
+    const spacing = pieces.map((b, i) => Math.hypot(b.x - pieces[(i + 1) % pieces.length].x, b.y - pieces[(i + 1) % pieces.length].y))
+      .sort((a, b) => a - b);
+    const maxGap = Math.max(25, spacing[Math.floor(spacing.length * 0.75)] * 2.2);  // don't bridge real gaps
+    ctx.lineCap = 'round';
+    for (let i = 0; i < pieces.length; i++) {
+      const a = pieces[i], b = pieces[(i + 1) % pieces.length];
+      if (Math.hypot(a.x - b.x, a.y - b.y) > maxGap) continue;
+      const [ax, ay] = P(a.x, a.y), [bx, by] = P(b.x, b.y);
+      const hp = Math.min(typeof a.hp === 'number' ? a.hp : 1, typeof b.hp === 'number' ? b.hp : 1);
+      ctx.globalAlpha = 0.35 + 0.65 * Math.max(0.15, Math.min(1, hp));
+      ctx.strokeStyle = sideCol(a.side === b.side ? a.side : '');
+      ctx.lineWidth = Math.max(3, 4 * s);
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
+    ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+  }
   for (const b of view.buildings || []) {
     const [px, py] = P(b.x, b.y);
     if (px < -40 || py < -40 || px > W + 40 || py > H + 40) continue;
