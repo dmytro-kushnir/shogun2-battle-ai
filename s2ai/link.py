@@ -114,6 +114,8 @@ class GameLink:
 
     # ---------------------------------------------------------------- writing
 
+    say: str | None = None  # shown in game as an advisor message when it changes
+
     def send(self, take: list[int], orders: list[dict]) -> int:
         """Write a new orders file: control exactly `take`, then carry out `orders` once. Returns its seq."""
         if self.battle is None:
@@ -129,7 +131,7 @@ class GameLink:
 
     def _write(self, take, orders, same_seq=False) -> None:
         body = {"battle": self.battle.id, "seq": self._seq, "written": int(time.time()), "take": list(take),
-                "orders": orders if not same_seq else self._last_orders}
+                "orders": orders if not same_seq else self._last_orders, "say": self.say}
         if not same_seq:
             self._last_orders = orders
         tmp = self.runtime / "orders.lua.tmp"

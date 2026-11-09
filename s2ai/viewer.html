@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S2AI battle map</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --ink:#e6e3da; --muted:#9a968c; --ai:#d0503c; --pl:#3c8ad0; --plan:#e8c15a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.45 system-ui, sans-serif; display:flex; height:100vh; }
+  #map { flex:1; min-width:0; }
+  canvas { width:100%; height:100%; display:block; }
+  aside { width:380px; max-width:42vw; background:var(--panel); padding:14px 16px; overflow:auto; border-left:1px solid #2b2f37; }
+  h1 { font-size:15px; margin:0 0 6px; letter-spacing:.02em; }
+  h2 { font-size:12px; text-transform:uppercase; color:var(--muted); margin:16px 0 6px; letter-spacing:.06em; }
+  .intent { font-size:15px; color:var(--plan); }
+  .muted { color:var(--muted); }
+  ul { margin:0; padding-left:16px; }
+  li { margin:2px 0; }
+  pre { white-space:pre-wrap; margin:0; font:12px/1.4 ui-monospace, Consolas, monospace; color:#cfcabe; }
+  .legend span { display:inline-block; margin-right:12px; }
+  .sw { display:inline-block; width:10px; height:10px; margin-right:4px; vertical-align:-1px; }
+  @media (max-width:700px) { body { flex-direction:column; } aside { width:auto; max-width:none; height:45vh; } }
+</style>
+</head>
+<body>
+<div id="map"><canvas id="c"></canvas></div>
+<aside>
+  <h1 id="title">Waiting for a battle…</h1>
+  <div class="muted" id="sub"></div>
+  <div class="legend muted" style="margin-top:6px">
+    <span><i class="sw" style="background:var(--ai)"></i>AI (Claude)</span>
+    <span><i class="sw" style="background:var(--pl)"></i>player</span>
+    <span><i class="sw" style="background:var(--plan)"></i>plan</span>
+  </div>
+  <h2>Intent</h2><div class="intent" id="intent">–</div>
+  <h2>Reasoning</h2><div id="reasoning" class="muted">–</div>
+  <h2>Groups</h2><ul id="groups"></ul>
+  <h2>Log</h2><pre id="log"></pre>
+</aside>
+<script>
+const c = document.getElementById('c'), ctx = c.getContext('2d');
+let data = null;
+
+async function poll() {
+  try { data = await (await fetch('/data', {cache:'no-store'})).json(); render(); } catch (e) {}
+  setTimeout(poll, 500);
+}
+
+function render() {
+  const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const side = document;
+  if (!data || !data.battle) return;
+  side.getElementById('title').textContent = `Battle ${data.battle}`;
+  side.getElementById('sub').textContent =
+    `t=${(data.t||0).toFixed(0)}s · phase ${data.phase||'?'} · AI alliance ${data.ai} · ${data.general||''} · plans ${data.plans||0}`;
+  const plan = data.plan;
+  side.getElementById('intent').textContent = plan ? plan.intent : '–';
+  side.getElementById('reasoning').textContent = plan ? plan.reasoning : '–';
+  side.getElementById('groups').innerHTML = plan ? plan.groups.map(g =>
+    `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${g.task}${g.target ? ' ' + g.target : ''}` +
+    `${g.position ? ' @' + g.position.map(v => v.toFixed(0)).join(',') : ''}` +
+    `${g.engage_within_m ? ' · engage ' + g.engage_within_m + 'm' : ''}${g.keep_range_m ? ' · keep ' + g.keep_range_m + 'm' : ''}</li>`).join('') : '';
+  side.getElementById('log').textContent = (data.log || []).slice().reverse().join('\n');
+
+  const units = data.units || [];
+  if (!units.length) return;
+  // fit all units with a margin; y grows upwards (north)
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const u of units) { x0 = Math.min(x0, u.x); x1 = Math.max(x1, u.x); y0 = Math.min(y0, u.y); y1 = Math.max(y1, u.y); }
+  const pad = 80, s = Math.min(W / (x1 - x0 + 2 * pad), H / (y1 - y0 + 2 * pad));
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const P = (x, y) => [W / 2 + (x - cx) * s, H / 2 - (y - cy) * s];
+
+  // grid every 100 m
+  ctx.strokeStyle = '#22262d'; ctx.lineWidth = 1;
+  const step = 100;
+  for (let gx = Math.floor((cx - W / 2 / s) / step) * step; gx < cx + W / 2 / s; gx += step) { const [px] = P(gx, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke(); }
+  for (let gy = Math.floor((cy - H / 2 / s) / step) * step; gy < cy + H / 2 / s; gy += step) { const [, py] = P(0, gy); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke(); }
+
+  const byId = Object.fromEntries(units.map(u => [u.id, u]));
+  // orders just sent: arrows
+  for (const o of data.orders || []) {
+    const u = byId[o.unit]; if (!u) continue;
+    let tx, ty;
+    if (o.cmd === 'attack' && byId[o.target]) { tx = byId[o.target].x; ty = byId[o.target].y; }
+    else if (o.cmd === 'move') { tx = o.x; ty = o.y; } else continue;
+    arrow(P(u.x, u.y), P(tx, ty), o.cmd === 'attack' ? 'rgba(208,80,60,.85)' : 'rgba(232,193,90,.85)');
+  }
+  // plan: move/hold slots
+  if (plan) for (const g of plan.groups) if (g.position) {
+    const [px, py] = P(g.position[0], g.position[1]);
+    ctx.strokeStyle = 'rgba(232,193,90,.6)'; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(px, py, 10, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(232,193,90,.9)'; ctx.font = '11px system-ui'; ctx.fillText(g.name, px + 12, py - 8);
+  }
+  // units: rotated boxes, width = frontage
+  for (const u of units) {
+    const [px, py] = P(u.x, u.y);
+    const w = Math.max(6, (u.w || 30) * s), d = Math.max(4, 8 * s + 3);
+    ctx.save(); ctx.translate(px, py); ctx.rotate((u.h || 0) * Math.PI / 180);
+    const col = u.ai ? getVar('--ai') : getVar('--pl');
+    ctx.globalAlpha = u.rout ? 0.35 : 1;
+    ctx.fillStyle = col; ctx.fillRect(-w / 2, -d / 2, w, d);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-w / 2, -d / 2, w, 2);   // front edge
+    if (u.ctl) { ctx.strokeStyle = getVar('--plan'); ctx.lineWidth = 1.5; ctx.strokeRect(-w / 2 - 2, -d / 2 - 2, w + 4, d + 4); }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#cfcabe'; ctx.font = '10px system-ui';
+    ctx.fillText(`${u.id % 100}${u.kind === 'cav' ? 'c' : u.missile ? 'm' : ''}${u.gen ? '★' : ''} ${u.men}`, px + w / 2 + 3, py + 3);
+  }
+}
+
+function arrow([ax, ay], [bx, by], col) {
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  const a = Math.atan2(by - ay, bx - ax);
+  ctx.beginPath(); ctx.moveTo(bx, by);
+  ctx.lineTo(bx - 8 * Math.cos(a - .4), by - 8 * Math.sin(a - .4)); ctx.lineTo(bx - 8 * Math.cos(a + .4), by - 8 * Math.sin(a + .4));
+  ctx.fill();
+}
+const getVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = s => String(s).replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+window.addEventListener('resize', render);
+poll();
+</script>
+</body>
+</html>

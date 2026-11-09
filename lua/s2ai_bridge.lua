@@ -222,6 +222,10 @@ local function apply_orders()
 		return
 	end
 	B.last_written = t.written
+	if type(t.say) == "string" and t.say ~= B.said then
+		B.said = t.say
+		pcall(function() B.battle:show_advisor_message("S2AI " .. t.say, t.say) end)
+	end
 	if t.seq == B.seq then return end
 	B.seq = t.seq
 
@@ -300,7 +304,7 @@ local function start()
 	B.battle = empire_battle:new()
 	B.id = os.date("%Y%m%d-%H%M%S")
 	B.stream = RUN .. "/battle-" .. B.id .. ".jsonl"
-	B.tick, B.seq, B.controlled, B.phase = 0, nil, {}, "deployment"
+	B.tick, B.seq, B.controlled, B.phase, B.said, B.last_written = 0, nil, {}, "deployment", nil, nil
 	scan()
 
 	local armies = {}

@@ -46,10 +46,13 @@ py -3.14 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 
 - `tools/packtool.ps1` - lists / extracts files from Shogun 2 packs (original `PFH3` and CE `PFHs` with LZ4).
 
-## Playing against the server (historical battles for now)
+## Playing against the general
 
 ```powershell
-.\.venv\Scripts\python -m s2ai.server        # demo commander: AI units attack the nearest enemy
-.\.venv\Scripts\python tools\test_bridge.py  # end-to-end test without the game
+.\.venv\Scripts\python -m s2ai.server                 # LLM general (Claude via your Claude Code login), live map at http://127.0.0.1:8765
+.\.venv\Scripts\python -m s2ai.server --commander demo  # no model: AI units attack the nearest enemy
+.\.venv\Scripts\python tools\try_general.py runtime\battle-<id>.jsonl --at 60   # one real plan on a recorded battle
+.\.venv\Scripts\python tools\test_bridge.py             # end-to-end test without the game
 ```
 
+Edit rules.md (facts) and strategy.md (tactics) in plain English; both are re-read for every battle.
