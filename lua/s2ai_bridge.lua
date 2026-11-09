@@ -209,13 +209,16 @@ local function apply_orders()
 	local t = read_orders()
 	if not t or t.battle ~= B.id then
 		if next(B.controlled) and B.last_written and os.time() - B.last_written > STALE_S then
-			release_all("no orders for this battle for " .. STALE_S .. " s")
+			release_all(string.format("no orders for this battle for %d s (file %s, battle %s)", STALE_S,
+				t and "for another battle" or "unreadable", tostring(t and t.battle)))
 			B.last_written = nil
 		end
 		return
 	end
 	if t.written and os.time() - t.written > STALE_S then
-		release_all("orders file is stale (server stopped?)")
+		-- run 12 released once 2 s after the first orders: log the clocks to see why
+		release_all(string.format("orders file is stale (server stopped?): os.time=%s written=%s seq=%s",
+			tostring(os.time()), tostring(t.written), tostring(t.seq)))
 		return
 	end
 	B.last_written = t.written
@@ -329,11 +332,6 @@ local function start()
 		end
 	end
 	log("bridge started: battle " .. B.id .. ", " .. #units .. " units, stream " .. B.stream)
-	-- let the native module log which script file the engine started for this battle (path format check)
-	pcall(function()
-		local report = package.loadlib(ROOT .. "/native/s2ai_native.dll", "s2ai_report")
-		if report then report() end
-	end)
 	pcall(function() B.battle:show_advisor_message("S2AI bridge active", "S2AI bridge active: battle " .. B.id) end)
 end
 

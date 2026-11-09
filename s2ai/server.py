@@ -95,8 +95,8 @@ def main() -> None:
                 armies = ", ".join(f"a{a['alliance']}/{a['army']}: {a['units']} units hcp {a['handicap']}"
                                    for a in msg["armies"])
                 log.info("battle %s: %d units [%s]; commanding alliance %d", b.id, len(msg["units"]), armies, ai)
-            elif kind == "event":
-                log.info("event %s (phase %s)", msg.get("name"), msg.get("phase"))
+            elif kind == "event" and msg.get("name") != "BattleUnitAttacksEnemyUnit":  # too chatty to log
+                log.info("event %s%s", msg.get("name"), f" -> phase {msg['phase']}" if "phase" in msg else "")
             elif kind == "applied" and msg.get("errors"):
                 log.warning("orders %s: %d errors, first: %s", msg.get("seq"), len(msg["errors"]), msg["errors"][0])
             elif kind == "battle_end":
