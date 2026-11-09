@@ -174,7 +174,9 @@ local HANDLERS = {
 	move = function(uc, o)
 		local run = o.run == true
 		if o.facing then
-			local width = o.width or call(B.units[o.unit].unit, "ordered_width") or 40
+			-- the unit can be gone from the battle by now (destroyed): fall back to a default width
+			local e = B.units[o.unit]
+			local width = o.width or (e and call(e.unit, "ordered_width")) or 40
 			uc:goto_location_angle_width(vec(o.x, o.y), o.facing, width, run)
 		else
 			uc:goto_location(vec(o.x, o.y), run)

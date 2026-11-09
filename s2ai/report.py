@@ -149,10 +149,13 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     for e in sorted(theirs, key=lambda e: math.hypot(e.x - ox, e.y - oy)):
         out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False))
     gone = [u for u in units if not u.alive or u.shattered]
-    if gone:
+    present = {u.id for u in units}
+    destroyed = [sid for sid in static if sid not in present]  # no longer on the field at all
+    if gone or destroyed:
         out.append("")
-        out.append("OUT OF THE FIGHT: " + ", ".join(f"{u.id} {'yours' if u.alliance == ai else 'enemy'}"
-                                                  for u in gone))
+        out.append("OUT OF THE FIGHT (do not give them orders): " + ", ".join(
+            [f"{u.id} {'yours' if u.alliance == ai else 'enemy'}" for u in gone]
+            + [f"{sid} {'yours' if static[sid]['alliance'] == ai else 'enemy'} (destroyed)" for sid in destroyed]))
     if events:
         out.append("")
         out.append("RECENT EVENTS: " + "; ".join(f"t={e.get('tick', 0) * 0.5:.0f}s {e.get('name')}" for e in events[-8:]))
