@@ -60,6 +60,7 @@
     <div id="reportBox" style="display:none"><details><summary>Report the general saw / problems</summary><pre id="report"></pre></details></div>
     <h2 id="plansHead" style="display:none">Plans (click to jump)</h2><div class="plans" id="plans"></div>
     <h2>Log</h2><pre id="log"></pre>
+    <h2>Unit symbols</h2><div id="symbols" class="muted"></div>
   </aside>
 </main>
 <script>
@@ -180,9 +181,15 @@ function render() {
     ctx.fillStyle = u.ai ? col.ai : col.pl; ctx.fillRect(-w / 2, -d / 2, w, d);
     ctx.fillStyle = '#fff'; ctx.fillRect(-w / 2, -d / 2, w, 2);
     if (u.ctl) { ctx.strokeStyle = col.plan; ctx.lineWidth = 1.5; ctx.strokeRect(-w / 2 - 2, -d / 2 - 2, w + 4, d + 4); }
-    ctx.restore(); ctx.globalAlpha = 1;
+    ctx.restore();
+    // class icon, kept upright, centred on the unit
+    const cls = classify(u), fs = Math.round(Math.max(11, Math.min(18, 10 * s + 8)));
+    ctx.font = `bold ${fs}px system-ui, "Segoe UI Symbol", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000a'; ctx.strokeText(cls.icon, px, py);
+    ctx.fillStyle = u.gen ? col.plan : '#fff'; ctx.fillText(cls.icon, px, py);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
     ctx.fillStyle = '#cfcabe'; ctx.font = '10px system-ui';
-    ctx.fillText(`${u.id % 100}${u.kind === 'cav' ? 'c' : u.missile ? 'm' : ''}${u.gen ? '★' : ''} ${u.men}`, px + w / 2 + 3, py + 3);
+    ctx.fillText(`${u.id % 100} · ${u.men}`, px + Math.max(w / 2, fs * .7) + 3, py + 3);
   }
 }
 function arrow([ax, ay], [bx, by], colr) {
@@ -196,6 +203,40 @@ const getVar = n => getComputedStyle(document.documentElement).getPropertyValue(
 const esc = s => String(s).replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
 const pretty = t => String(t || '?').replace(/^(Genpei|Boshin|Sho|Mon|FotS|Shogun|Rok)_/, '').replace(/_/g, ' ');
 
+// unit class from the game's type key (e.g. Inf_Spear_Yari_Ashigaru, Cav_Missile_Bow_Ki, Gen_Tokugawa_Ieyasu)
+const CLASSES = [
+  ['general', '★', 'general'],
+  ['art', '◉', 'artillery'],
+  ['inf_spear', '↑', 'spears (yari, pikes)'],
+  ['inf_pole', '⇑', 'polearms (naginata)'],
+  ['inf_sword', '✕', 'swords, clubs (katana, no-dachi, monks)'],
+  ['inf_bow', ')', 'bows'],
+  ['inf_gun', '•', 'guns (matchlocks, rifles)'],
+  ['cav_sword', '/', 'cavalry (sword)'],
+  ['cav_spear', '/↑', 'cavalry (spear)'],
+  ['cav_bow', '/)', 'horse archers'],
+  ['cav_gun', '/•', 'mounted guns'],
+  ['inf', '■', 'other infantry'],
+];
+const CLASS_BY_KEY = Object.fromEntries(CLASSES.map(([k, icon, name]) => [k, {key: k, icon, name}]));
+function classify(u) {
+  const t = String(u.type || '');
+  if (u.gen) return CLASS_BY_KEY.general;
+  if (u.kind === 'art' || /Art|Cannon|Mortar|Gatling|Artillery|Rocket/i.test(t)) return CLASS_BY_KEY.art;
+  const gun = /Matchlock|Rifle|Musket|Gun|Carbine|Pistol|Marines|Line_Inf|Revolver|Shotgun/i.test(t);
+  const bow = /Bow|Archer/i.test(t);
+  const missile = u.missile || gun || bow;
+  if (u.kind === 'cav' || /(^|_)Cav(_|$)|Cavalry/i.test(t)) {
+    if (missile) return gun ? CLASS_BY_KEY.cav_gun : CLASS_BY_KEY.cav_bow;
+    return /Spear|Yari|Lance|Naginata/i.test(t) ? CLASS_BY_KEY.cav_spear : CLASS_BY_KEY.cav_sword;
+  }
+  if (missile) return gun ? CLASS_BY_KEY.inf_gun : CLASS_BY_KEY.inf_bow;
+  if (/Naginata|Halberd|Glaive/i.test(t)) return CLASS_BY_KEY.inf_pole;
+  if (/Spear|Yari|Pike/i.test(t)) return CLASS_BY_KEY.inf_spear;
+  if (/Sword|Katana|Dachi|Tetsubo|Monk|Club|Kensai|Ninja/i.test(t)) return CLASS_BY_KEY.inf_sword;
+  return CLASS_BY_KEY.inf;
+}
+
 // ------------------------------------------------------------ interaction
 c.addEventListener('mousemove', ev => {
   const tip = $('tip');
@@ -204,7 +245,7 @@ c.addEventListener('mousemove', ev => {
   let best = null, bd = 14;
   for (const u of fit.units) { const [px, py] = fit.P(u.x, u.y); const d = Math.hypot(px - mx, py - my); if (d < bd) { bd = d; best = u; } }
   if (!best) { tip.style.display = 'none'; return; }
-  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}`;
+  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}`;
   tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
 });
 c.addEventListener('mouseleave', () => $('tip').style.display = 'none');
@@ -225,6 +266,9 @@ function loop(now) {
   lastFrame = now; requestAnimationFrame(loop);
 }
 window.addEventListener('resize', render);
+$('symbols').innerHTML = CLASSES.map(([, icon, name]) =>
+  `<div><b style="display:inline-block;width:26px;color:var(--ink)">${icon}</b>${name}</div>`).join('') +
+  '<div style="margin-top:4px">box = unit frontage, white edge = its front</div>';
 loadBattles(); pollLive(); requestAnimationFrame(loop);
 </script>
 </body>
