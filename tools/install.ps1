@@ -1,13 +1,15 @@
 <#
-Installs (or removes) the shogun2-battle-ai loader into the game's data folders.
+Installs (or removes) shogun2-battle-ai's game-side hooks.
 
-For each target script it takes the game's own copy out of YOUR data.pack, adds a loader that runs
-lua/s2ai_probe.lua from this repository, and writes the result as a loose file under data\ (loose files
-override the packs). Nothing in the game's packs is modified; -Uninstall deletes the loose files again.
-
-Targets:
-  battle_scripted.lua         UI/event scripting state, loaded for every battle   (loader appended, env "ui")
-  <historical>.battle_script  battle-script state of the menu historical battles  (loader prepended, env "battle")
+Nothing in the game's own packs is modified. For each game data folder (Shogun 2 Complete Edition's, and
+Remastered CE's if installed) it writes:
+  s2ai_battle.pack  a small "movie" pack (the engine loads those by itself) holding:
+    frontend_scripted.lua                 the game's main-menu script + a loader for lua/s2ai_frontend.lua,
+                                          which loads native/s2ai_native.dll (engine patch for script-less battles)
+    s2ai\custom.battle_script             loader for lua/s2ai_bridge.lua: the script of custom and campaign battles
+    shogun_historical_battles\...         the five menu historical battles' scripts with the bridge loader in front
+  plus the same files as loose copies (handy to inspect; the pack is what the game uses).
+The game's own scripts are taken from YOUR data.pack at install time; none are shipped with this repository.
 
   .\tools\install.ps1                 # install into every detected Shogun 2 Complete Edition data folder
   .\tools\install.ps1 -Uninstall
@@ -21,88 +23,87 @@ $ErrorActionPreference = 'Stop'
 $Repo = Split-Path $PSScriptRoot -Parent
 $RepoLua = ($Repo -replace '\\', '/')
 $Marker = '-- shogun2-battle-ai loader'
+$PackName = 's2ai_battle.pack'
+$Python = Join-Path $Repo '.venv\Scripts\python.exe'
 
 $Targets = @(
-    @{ Path = 'battle_scripted.lua'; Mode = 'append'; Env = 'ui' }
-    @{ Path = 'frontend_scripted.lua'; Mode = 'append'; Env = 'frontend' }
-) +(@('kawanakajima\kawanakajima_battle', 'nagashino\nagashino_battle', 'okehazama\okehazama_battle',
+    @{ Path = 'frontend_scripted.lua'; Mode = 'append'; Script = 's2ai_frontend.lua' }
+    @{ Path = 's2ai\custom.battle_script'; Mode = 'new'; Script = 's2ai_bridge.lua' }
+) + (@('kawanakajima\kawanakajima_battle', 'nagashino\nagashino_battle', 'okehazama\okehazama_battle',
         'sekigahara\sekigahara_battle', 'nagashima\nagashima_battle') | ForEach-Object {
-        @{ Path = "shogun_historical_battles\$_.battle_script"; Mode = 'prepend'; Env = 'battle' }
-    }) + @(
-    # our own script for battles that have none (custom, campaign); native/s2ai_native.dll points the engine at it
-    @{ Path = 's2ai\custom.battle_script'; Mode = 'new'; Env = 'battle' }
-)
+        @{ Path = "shogun_historical_battles\$_.battle_script"; Mode = 'prepend'; Script = 's2ai_bridge.lua' }
+    })
+# written by earlier versions; removed on install and uninstall when they carry our marker
+$Legacy = @('battle_scripted.lua')
 
-if (-not $DataDirs) {
-    $libs = @()
-    $vdf = Get-ChildItem 'C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf', 'D:\Steam\steamapps\libraryfolders.vdf' -ErrorAction SilentlyContinue
-    foreach ($v in $vdf) { $libs += (Select-String -Path $v.FullName -Pattern '"path"\s+"([^"]+)"').Matches | ForEach-Object { $_.Groups[1].Value -replace '\\\\', '\' } }
-    $DataDirs = foreach ($l in ($libs | Sort-Object -Unique)) {
+function Find-DataDirs {
+    $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
+    if (-not $steam) { return @() }
+    $libs = @($steam)
+    $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+    if (Test-Path $vdf) {
+        $libs += (Select-String -Path $vdf -Pattern '"path"\s+"([^"]+)"').Matches | ForEach-Object { $_.Groups[1].Value -replace '\\\\', '\' }
+    }
+    foreach ($l in ($libs | Sort-Object -Unique)) {
         foreach ($sub in 'data', 'RemasteredCE\data') {
             $d = Join-Path $l "steamapps\common\Shogun 2 Complete Edition\$sub"
             if (Test-Path (Join-Path $d 'data.pack')) { $d }
         }
     }
 }
-if (-not $DataDirs) { throw 'No Shogun 2 Complete Edition data folder found; pass -DataDirs.' }
 
-$ProbePath = Join-Path $Repo 'lua\s2ai_probe.lua'
-
-# Every loader dofile()s a script from the repo inside pcall: an error in our code must never stop the game's
-# own script (prepended loaders sit at the top of historical battle scripts).
-function Get-Loader($envName) {
-    $report = @"
-	if not ok then
-		pcall(function()
-			local f = io.open(S2AI_ROOT .. "/runtime/probe.log", "a")
-			f:write("LOAD ERROR [$envName]: ", tostring(err), "\n"); f:close()
-		end)
-	end
-"@
-    # battle state: the bridge (run 6 proved dofile + io work there, so edits apply without reinstalling);
-    # UI and main-menu states: the probe (diagnostics only)
-    $script = if ($envName -eq 'battle') { 's2ai_bridge.lua' } else { 's2ai_probe.lua' }
-    $body = "local ok, err = pcall(dofile, S2AI_ROOT .. `"/lua/$script`")`n$report"
+# Every loader dofile()s a script from this repository inside pcall: an error in our code must never stop the
+# game's own script (the historical battle loaders sit at the top of those scripts).
+function Get-Loader($script) {
     @"
 $Marker (tools/install.ps1; remove with -Uninstall)
 S2AI_ROOT = "$RepoLua"
-S2AI_ENV = "$envName"
 do
-$body
+	local ok, err = pcall(dofile, S2AI_ROOT .. "/lua/$script")
+	if not ok then
+		pcall(function()
+			local f = io.open(S2AI_ROOT .. "/runtime/loader.log", "a")
+			f:write(os.date("%Y-%m-%d %H:%M:%S"), " ${script}: ", tostring(err), "\n"); f:close()
+		end)
+	end
 end
 -- end of shogun2-battle-ai loader
 "@
 }
 
-$PackName = 's2ai_battle.pack'   # movie-type pack with the battle-env targets; the engine loads it by itself
-$Python = Join-Path $Repo '.venv\Scripts\python.exe'
+function Remove-Ours($d, $rel) {
+    $target = Join-Path $d $rel
+    if ((Test-Path $target) -and (Select-String -Path $target -SimpleMatch $Marker -Quiet)) {
+        Remove-Item $target; Write-Host "removed  $target"
+        $dir = Split-Path $target
+        while ($dir -ne $d -and (Test-Path $dir) -and -not (Get-ChildItem $dir -Force)) { Remove-Item $dir; $dir = Split-Path $dir }
+    } elseif (Test-Path $target) {
+        Write-Warning "left alone (not ours): $target"
+    }
+}
+
+if (-not $DataDirs) { $DataDirs = @(Find-DataDirs) }
+if (-not $DataDirs) { throw 'No Shogun 2 Complete Edition data folder found through Steam; pass -DataDirs.' }
 
 foreach ($d in $DataDirs) {
+    foreach ($rel in $Legacy) { if (Test-Path (Join-Path $d $rel)) { Remove-Ours $d $rel } }
     if ($Uninstall) {
         $pack = Join-Path $d $PackName
         if (Test-Path $pack) { Remove-Item $pack; Write-Host "removed  $pack" }
-        foreach ($t in $Targets) {
-            $target = Join-Path $d $t.Path
-            if ((Test-Path $target) -and (Select-String -Path $target -SimpleMatch $Marker -Quiet)) {
-                Remove-Item $target; Write-Host "removed  $target"
-                $dir = Split-Path $target
-                while ($dir -ne $d -and (Test-Path $dir) -and -not (Get-ChildItem $dir -Force)) { Remove-Item $dir; $dir = Split-Path $dir }
-            } elseif (Test-Path $target) {
-                Write-Warning "left alone (not ours): $target"
-            }
-        }
+        foreach ($t in $Targets) { Remove-Ours $d $t.Path }
         continue
     }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("s2ai_" + [guid]::NewGuid())
-    $filter = '^(' + (($Targets | ForEach-Object { [regex]::Escape($_.Path) }) -join '|') + ')$'
+    $filter = '^(' + (($Targets | Where-Object { $_.Mode -ne 'new' } | ForEach-Object { [regex]::Escape($_.Path) }) -join '|') + ')$'
     & (Join-Path $PSScriptRoot 'packtool.ps1') -Pack (Join-Path $d 'data.pack') -Filter $filter -OutDir $tmp 6>$null | Out-Null
+    $packArgs = @()
     foreach ($t in $Targets) {
         $target = Join-Path $d $t.Path
         if ((Test-Path $target) -and -not (Select-String -Path $target -SimpleMatch $Marker -Quiet)) {
             Write-Warning "skipped: $target exists and was not written by this tool"
             continue
         }
-        $loader = Get-Loader $t.Env
+        $loader = Get-Loader $t.Script
         if ($t.Mode -eq 'new') {
             $out = $loader
         } else {
@@ -113,18 +114,11 @@ foreach ($d in $DataDirs) {
         }
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         [IO.File]::WriteAllText($target, ($out -replace "`r?`n", "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
-        Write-Host "installed $target"
-    }
-    # the same battle-env files once more, as a pack: loose files did not seem to reach the battle-script state
-    $packArgs = foreach ($t in $Targets | Where-Object { $_.Env -ne 'ui' }) {
-        $loose = Join-Path $d $t.Path
-        if (Test-Path $loose) { "$($t.Path)=$loose" }
-    }
-    if ($packArgs) {
-        & $Python (Join-Path $PSScriptRoot 's2pack.py') (Join-Path $d $PackName) @packArgs | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "s2pack.py failed for $d" }
-        Write-Host "installed $(Join-Path $d $PackName)"
+        $packArgs += "$($t.Path)=$target"
     }
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    & $Python (Join-Path $PSScriptRoot 's2pack.py') (Join-Path $d $PackName) @packArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "s2pack.py failed for $d" }
+    Write-Host "installed $(Join-Path $d $PackName) ($($packArgs.Count) scripts)"
 }
 if (-not $Uninstall) { New-Item -ItemType Directory -Force (Join-Path $Repo 'runtime') | Out-Null }

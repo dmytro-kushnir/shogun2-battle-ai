@@ -7,8 +7,14 @@ import numpy as np
 import pefile
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 
-CE = r"F:\SteamLibrary\steamapps\common\Shogun 2 Complete Edition\RemasteredCE\CE.dll"
-VANILLA = r"F:\SteamLibrary\steamapps\common\Shogun 2 Complete Edition\empire.retail.x64.dll"
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from s2ai.gamepaths import engine_dlls  # noqa: E402
+
+_dlls = {p.name: str(p) for p in engine_dlls()}
+CE = _dlls.get("CE.dll")                     # Remastered CE's engine, if installed
+VANILLA = _dlls.get("empire.retail.x64.dll")
 
 
 class Img:

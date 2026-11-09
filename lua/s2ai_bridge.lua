@@ -13,7 +13,8 @@
 -- Coordinates: x = game x, y = game z (the ground plane), metres. Headings as the game's unit:bearing().
 -- Every engine call is wrapped in pcall: the battle must never break because of us.
 
-local ROOT = S2AI_ROOT or "D:/Develop/shogun2-battle-ai"
+local ROOT = S2AI_ROOT -- set by the loader to this repository's folder
+if not ROOT then return end
 local RUN = ROOT .. "/runtime"
 local TICK_MS = 500
 local STALE_S = 15

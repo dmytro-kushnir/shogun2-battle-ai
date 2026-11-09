@@ -1,1 +1,1 @@
-lupa>=2.0   # real Lua 5.1 for tools/check_lua.py
+lupa>=2.0    # Lua 5.1 for the test tools (the server itself needs only the standard library)

@@ -30,5 +30,5 @@ def scan(path):
                 extra = f"  target RVA {site + 7 + d:#x}"
             print(f"  {name:16} hits={len(hits)} RVA {site:#x}  {ins.bytes.hex(' ')}  {ins.mnemonic} {ins.op_str}{extra}")
 
-for p in (sys.argv[1:] or [CE, VANILLA]):
+for p in (sys.argv[1:] or [x for x in (CE, VANILLA) if x]):
     scan(p)

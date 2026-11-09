@@ -1,7 +1,7 @@
 # Builds native/s2ai_native.dll (and the offline test) with Zig (winget install zig.zig), then runs the offline
-# test against the engine DLL: it maps the engine without running it and checks the patch.
+# test against each engine DLL found through Steam: it maps the engine WITHOUT running it and checks the patch.
 #   .\native\build.ps1 [-Engine <path to CE.dll or empire.retail.x64.dll>]
-param([string]$Engine = 'F:\SteamLibrary\steamapps\common\Shogun 2 Complete Edition\RemasteredCE\CE.dll')
+param([string]$Engine)
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
@@ -10,5 +10,12 @@ try {
     zig cc -target x86_64-windows-gnu -O1 -o test_patch.exe test_patch.c
     if ($LASTEXITCODE) { throw 'build of test_patch.exe failed' }
     Remove-Item *.pdb, *.lib -ErrorAction SilentlyContinue
-    if (Test-Path $Engine) { .\test_patch.exe $Engine }
+    $engines = if ($Engine) { @($Engine) } else {
+        & (Join-Path $PSScriptRoot '..\.venv\Scripts\python.exe') -c "import sys; sys.path.insert(0, '..'); from s2ai.gamepaths import engine_dlls; [print(p) for p in engine_dlls()]"
+    }
+    foreach ($e in $engines) {
+        Write-Host "--- offline patch test: $e"
+        .\test_patch.exe $e
+        if ($LASTEXITCODE) { throw "offline patch test failed for $e" }
+    }
 } finally { Pop-Location }
