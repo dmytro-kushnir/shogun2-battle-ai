@@ -247,9 +247,9 @@ local HANDLERS = {
 	formation = function(uc, o) uc:change_formation(o.formation) end,
 	ability = function(uc, o) uc:perform_special_ability(o.ability) end,
 	-- sieges (argument conventions as in the game's own battle scripts)
-	garrison = function(uc, o) uc:defend_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), o.run ~= false) end,
-	climb = function(uc, o) uc:climb_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
-	attack_building = function(uc, o) uc:attack_building(B.buildings[o.building] or error("no building " .. tostring(o.building))) end,
+	garrison = function(uc, o) uc:defend_building(B._building(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end,
+	climb = function(uc, o) uc:climb_building(B._building(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
+	attack_building = function(uc, o) uc:attack_building(B._building(o.building) or error("no building " .. tostring(o.building))) end,
 	occupy = function(uc, o) uc:occupy_zone(vec(o.x, o.y), o.run ~= false) end,
 	leave_building = function(uc) uc:leave_building() end,
 	shot_type = function(uc, o) uc:change_shot_type(o.shot) end,
@@ -370,7 +370,7 @@ function S2AI_Bridge_Tick()
 		local units = {}
 		for _, id in ipairs(sorted_ids()) do units[#units + 1] = state_record(id, B.units[id]) end
 		local bstate = nil
-		if B.forts and #B.forts > 0 and B.tick % 4 == 1 then bstate = building_states() end -- every 2 s
+		if B.forts and #B.forts > 0 and B.tick % 20 == 2 then bstate = building_states() end -- every 10 s
 		emit({ type = "state", tick = B.tick, t = B.tick * TICK_MS / 1000, gt = call(B.battle, "game_time"),
 			phase = B.phase, units = units, buildings = bstate })
 		apply_orders()
@@ -463,16 +463,29 @@ function scan_buildings() -- assigns the local declared at the top
 		if not is_building then
 			skipped = skipped + 1
 		else
+			local name = call(b, "name")
+			if type(name) ~= "string" then
+				-- degraded handles: stop before touching anything else (see the note on building handles)
+				log(string.format("buildings: item %d returned a %s name - scan stopped to protect the battle", i, type(name)))
+				b, mt = nil, nil
+				break
+			end
 			local p = call(b, "position")
-			local name, cap, owner = call(b, "name"), num(call(b, "capacity")), owner_alliance(b)
-			name = type(name) == "string" and name or "?"
+			local cap, owner = num(call(b, "capacity")), owner_alliance(b)
 			local mil = is_military(name, cap, owner - 1)
-			B.buildings[i] = b
 			if mil then B.forts[#B.forts + 1] = i end
 			out[#out + 1] = { id = i, name = name, x = p and num(call(p, "get_x")), y = p and num(call(p, "get_z")),
 				z = p and num(call(p, "get_y")), cap = cap, owner = owner, hp = num(call(b, "health")), mil = mil }
+			p = nil
 		end
+		b, mt = nil, nil
+		-- Building handles come from a small engine pool: holding them (run 17 kept all 368) made every handle
+		-- after the 23rd garbage, and calls on those corrupted the battle-script state (the timer died). Read,
+		-- drop, and give the handles back regularly.
+		if i % 10 == 0 then collectgarbage("collect") end
 	end
+	list = nil
+	collectgarbage("collect")
 	log(string.format("buildings: %d listed, %d read (%d fortifications), %d skipped (not battle.building)",
 		n, #out, #B.forts, skipped))
 	local parts = {}
@@ -485,12 +498,25 @@ function scan_buildings() -- assigns the local declared at the top
 end
 
 -- changing state of the fortifications only (a few dozen buildings): [id, health, owner, garrisoned]
+-- a building handle, fetched fresh (never stored: see scan_buildings); use it at once and drop it
+local function building(i)
+	local list = call(B.battle, "buildings")
+	return list and call(list, "item", i) or nil
+end
+B._building = building
+
 function building_states() -- assigns the local declared at the top
 	local out = {}
 	for _, i in ipairs(B.forts or {}) do
-		local b = B.buildings[i]
-		out[#out + 1] = { i, call(b, "health"), owner_alliance(b), call(b, "currently_garrisoned") and 1 or 0 }
+		local b = building(i)
+		if b then
+			local name = call(b, "name")
+			if type(name) ~= "string" then break end -- degraded handle: stop
+			out[#out + 1] = { i, num(call(b, "health")), owner_alliance(b), call(b, "currently_garrisoned") and 1 or 0 }
+		end
+		b = nil
 	end
+	collectgarbage("collect") -- give the handles back to the engine's pool
 	return out
 end
 
@@ -539,5 +565,13 @@ local function start()
 	pcall(function() B.battle:show_advisor_message("S2AI bridge active", "S2AI bridge active: battle " .. B.id) end)
 end
 
-local ok, err = pcall(start)
-if not ok then log("START ERROR: " .. tostring(err)) end
+-- Diagnostic switch: with runtime/bridge_off present the battle script loads but does nothing at all (no battle
+-- object, no timer, no engine call) - to tell "a script exists in this battle" apart from "what the bridge does".
+local off = io.open(RUN .. "/bridge_off", "r")
+if off then
+	off:close()
+	log("bridge_off present: battle script loaded, bridge NOT started")
+else
+	local ok, err = pcall(start)
+	if not ok then log("START ERROR: " .. tostring(err)) end
+end

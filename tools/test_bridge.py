@@ -92,7 +92,7 @@ local alliances = list({
 
 -- buildings as battle:buildings() lists them: all share the registered battle.building class (like the engine's
 -- userdata), plus one item of ANOTHER class (run 14: such items exist; calling methods on them broke the battle)
-local FIELDS = {}
+local FIELDS = setmetatable({}, { __mode = "k" })  -- weak: must not keep handles alive itself
 local METHODS = {
     name = function(s) return FIELDS[s].name_ end, position = function(s) return FIELDS[s].pos end,
     capacity = function(s) return FIELDS[s].cap end, alliance_owner_id = function(s) return FIELDS[s].owner end,
@@ -102,10 +102,26 @@ local METHODS = {
 local BASE = newproxy(true)                 -- every building shares this metatable, like the engine's class
 getmetatable(BASE).__index = METHODS
 debug.getregistry()["battle.building"] = getmetatable(BASE)
+-- like the engine (run 17): item(i) hands out a handle from a small pool; with POOL handles alive at once the
+-- next ones are garbage. The bridge must read and drop handles, never keep them.
+local POOL, LIVE = 20, setmetatable({}, { __mode = "k" })
+MOCK_POOL_EXHAUSTED = false
 local function make_building(name, x, z, cap, owner)
+    return { name_ = name, x = x, z = z, cap = cap, owner = owner }  -- a template; handles come from item()
+end
+local function handle(t)
+    local alive = 0
+    for _ in pairs(LIVE) do alive = alive + 1 end
+    if alive >= POOL then
+        MOCK_POOL_EXHAUSTED = true
+        local bad = newproxy(BASE)
+        FIELDS[bad] = { name_ = function() end, pos = nil }  -- garbage, as the engine's were
+        return bad
+    end
     local b = newproxy(BASE)
-    FIELDS[b] = { name_ = name, pos = battle_vector:new(), cap = cap, owner = owner }
-    FIELDS[b].pos:set(x, 120, z)
+    FIELDS[b] = { name_ = t.name_, pos = battle_vector:new(), cap = t.cap, owner = t.owner }
+    FIELDS[b].pos:set(t.x, 120, t.z)
+    LIVE[b] = true
     return b
 end
 function MOCK_BUILDING_NAME(b) return FIELDS[b].name_ end
@@ -115,8 +131,17 @@ getmetatable(foreign).__index = function(_, k)
     MOCK_FOREIGN_TOUCHED = true
     return function() return function() end end  -- alliance_owner_id() returns a function, as in run 14
 end
-local buildings = list({ make_building("castle_02_gate_02", 80, 40, 168, 1),
-    make_building("castle_02_wall_10_01", 80, 20, 20, 1), foreign, make_building("village_house_01", -500, 300, 0, -1) })
+local templates = { make_building("castle_02_gate_02", 80, 40, 168, 1),
+    make_building("castle_02_wall_10_01", 80, 20, 20, 1), "foreign" }
+for k = 1, 57 do templates[#templates + 1] = make_building("village_house_" .. k, -500 + k, 300, 0, -1) end
+local buildings = obj({
+    count = function() return #templates end,
+    item = function(_, i)
+        local t = templates[i]
+        if t == "foreign" then return foreign end
+        return t and handle(t) or nil
+    end,
+})
 
 MOCK_TIMERS = {}
 empire_battle = {}
@@ -217,8 +242,10 @@ def main() -> bool:
                 problems.append("a village house was not recognised as scenery")
             if g.MOCK_FOREIGN_TOUCHED:
                 problems.append("the bridge called methods on a buildings() item that is not a battle.building")
-            if len(blds) != 3:
-                problems.append(f"expected 3 buildings read (the foreign item skipped), got {len(blds)}")
+            if len(blds) != 59:
+                problems.append(f"expected 59 buildings read (the foreign item skipped), got {len(blds)}")
+            if g.MOCK_POOL_EXHAUSTED:
+                problems.append("the bridge held on to building handles until the engine's pool ran out")
             if gate is not None:
                 ai_id = next(u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2)
                 link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
