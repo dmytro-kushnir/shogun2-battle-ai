@@ -130,6 +130,9 @@ How to answer:
   against iron-armoured ships, explosive common shells (shorter range, they start fires) against wooden hulls,
   solid shot for the longest reach where it outranges the rest. Keep ships together so several fire at one enemy,
   stay at the range where your guns reach and theirs do not when you can, and finish damaged ships first.
+  Ships sink at a reported hull damage of 10-50%, most around 20-25%: a ship at 15% is in danger (SINKING RISK),
+  pull it back out of range. A big ironclad (hull 6000-8000) outlasts corvettes: keep your ships together
+  against it, mind its gun range, and do not let it pick off lone or damaged ships.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

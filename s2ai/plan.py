@@ -102,8 +102,15 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
         task = g.get("task") if g.get("task") in TASKS else "hold"
         target = _int(g.get("target"))
         if task == "attack" and target not in enemies:
-            problems.append(f"group '{g.get('name')}': attack target {g.get('target')} is not an enemy unit; holding")
-            task = "hold"
+            if enemies:
+                # usually a ship sunk or a unit gone while the model was thinking (battle 190434: the fleet held
+                # still twice): the executor takes the best enemy nearby instead
+                problems.append(f"group '{g.get('name')}': attack target {g.get('target')} is not a live enemy unit;"
+                                f" attacking the nearest instead")
+            else:
+                problems.append(f"group '{g.get('name')}': attack target {g.get('target')} is not an enemy unit;"
+                                f" holding")
+                task = "hold"
         if task != "attack":
             target = None
         building = _int(g.get("building"))

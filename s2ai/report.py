@@ -58,6 +58,12 @@ def pretty_type(t: str) -> str:
     return t.replace("_", " ")
 
 
+# Ships drop out of the battle (sunk, burnt or blown up) at a reported hull damage of 10-50%, most around
+# 20-25% (naval battles 175931 and 190434, 17 ships lost), with most of the crew alive: the number is not a
+# fraction of what a ship can take.
+SHIP_HULL_DANGER = 0.15
+
+
 def merge(static: dict[int, dict], state: dict) -> list[U]:
     units = []
     for s in state["units"]:
@@ -197,6 +203,8 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> st
         ammo = f" guns {u.range:.0f}m" if u.range else ""
         if u.hull is not None:
             ammo += f" hull damage {u.hull:.0%}"
+            if u.hull >= SHIP_HULL_DANGER:
+                ammo += " (SINKING RISK)"
         if u.sail:
             ammo += f" sails damaged {u.sail:.0%}"
         return (f"  {u.id:>5} {u.label[:34]:<34} {kind:<6} crew {u.men:>4}/{u.men0:<4} at ({u.x:6.0f},{u.y:6.0f}) "

@@ -188,6 +188,13 @@ def test_ship_shot_types():
     assert {"cmd": "shot_type", "unit": 1, "shot": "segment_shell"} in o, o
     assert not any(x["cmd"] == "shot_type" for x in ex.tick(ships, 1)[1])  # loaded once
     assert "segment_shell" in ex.unit_note(1)
+    # battle 190434: the target sank while the model was thinking -> attack the nearest, not hold still
+    plan, probs = validate(plan_of(group([1], target=10001)), {1}, {9}, set(), {})
+    assert plan["groups"][0]["task"] == "attack" and "nearest" in probs[0], (plan, probs)
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan, ships, 0)
+    assert {"cmd": "attack", "unit": 1, "target": 9} == {k: v for k, v in ex.tick(ships, 0)[1][0].items()
+                                                         if k in ("cmd", "unit", "target")}
 
 
 if __name__ == "__main__":
