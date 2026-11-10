@@ -32,6 +32,13 @@
   .plans .t { color:var(--muted); font-variant-numeric:tabular-nums; display:inline-block; width:46px; }
   details summary { cursor:pointer; color:var(--muted); margin-top:8px; }
   .legend span { display:inline-block; margin-right:10px; }
+  .abl { display:flex; gap:8px; align-items:center; padding:2px 0; }
+  .abl img, .tipab img { width:22px; height:22px; border-radius:3px; flex:none; }
+  .abl .t { color:var(--muted); font-variant-numeric:tabular-nums; width:40px; flex:none; }
+  .abl .st { margin-left:auto; color:var(--muted); font-size:11.5px; white-space:nowrap; }
+  .abl .st.on { color:var(--plan); }
+  .tipab { display:flex; gap:4px; align-items:center; margin-top:3px; }
+  .tipab img.off { opacity:.35; filter:grayscale(1); }
   .sw { display:inline-block; width:10px; height:10px; margin-right:4px; vertical-align:-1px; }
   @media (max-width:760px) { main { flex-direction:column; } aside { width:auto; max-width:none; height:48vh; border-left:0; border-top:1px solid var(--line); } }
 </style>
@@ -57,6 +64,7 @@
     <h2>Intent</h2><div class="intent" id="intent">–</div>
     <h2>Reasoning</h2><div id="reasoning" class="muted">–</div>
     <h2>Groups</h2><ul id="groups"></ul>
+    <h2>Special abilities used</h2><div id="abilities" class="muted">–</div>
     <div id="reportBox" style="display:none"><details><summary>Report the general saw / problems</summary><pre id="report"></pre></details></div>
     <h2 id="plansHead" style="display:none">Plans (click to jump)</h2><div class="plans" id="plans"></div>
     <h2>Log</h2><pre id="log"></pre>
@@ -89,7 +97,8 @@ function buildLive() {
   view = { title: `Live: battle ${live.battle}`,
     sub: `t=${(live.t||0).toFixed(0)}s · phase ${live.phase||'?'} · AI alliance ${live.ai} · ${live.general||''} · plans ${live.plans||0}`,
     units: live.units || [], plan: live.plan, orders: live.orders || [], log: (live.log || []).slice().reverse(),
-    buildings: live.buildings || [], terrain: live.terrain || [] };
+    buildings: live.buildings || [], terrain: live.terrain || [],
+    T: live.t || 0, abUsed: live.ab_used || [], timings: live.timings || {} };
   render();
 }
 async function openReplay(id) {
@@ -123,7 +132,8 @@ function buildReplay() {
   log.sort((a, b) => parseFloat(b.slice(2)) - parseFloat(a.slice(2)));
   view = { title: `Replay: battle ${rep.battle}`,
     sub: `phase ${f.phase||'?'} · AI alliance ${rep.ai} · ${rep.plans.length} plans` + (plan && plan.info ? ` · this plan took ${plan.info.seconds}s` : ''),
-    units, buildings, terrain: rep.terrain || [], plan: plan && plan.plan, orders, log, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
+    units, buildings, terrain: rep.terrain || [], plan: plan && plan.plan, orders, log,
+    T, abUsed: (rep.ab_used || []).filter(a => a.t <= T), timings: rep.timings || {}, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
   $('slider').value = Math.floor(T); $('tlabel').textContent = `${T.toFixed(0)}s`;
   document.querySelectorAll('#plans div').forEach(d => d.classList.toggle('cur', +d.dataset.i === pi));
   render();
@@ -143,8 +153,10 @@ function render() {
   $('groups').innerHTML = plan ? plan.groups.map(g =>
     `<li><b>${esc(g.name)}</b> ${g.units.length} units · ${esc(g.task)}${g.target ? ' ' + esc(g.target) : ''}${g.building != null ? ' b' + esc(g.building) : ''}` +
     `${g.position ? ' @' + g.position.map(v => (+v).toFixed(0)).join(',') : ''}` +
+    `${g.via ? ' · via ' + g.via.map(w => w.map(v => (+v).toFixed(0)).join(',')).join(' → ') : ''}` +
     `${g.engage_within_m ? ' · engage ' + esc(g.engage_within_m) + 'm' : ''}${g.keep_range_m ? ' · keep ' + esc(g.keep_range_m) + 'm' : ''}</li>`).join('') : '';
   if (view.report !== undefined) $('report').textContent = view.report || '–';
+  renderAbilities();
   $('log').textContent = view.log.join('\n');
 
   const units = view.units;
@@ -241,6 +253,16 @@ function render() {
     const hostile = o.cmd === 'attack' || o.cmd === 'attack_building' || o.cmd === 'climb';
     arrow(P(u.x, u.y), P(tx, ty), hostile ? 'rgba(208,80,60,.85)' : 'rgba(232,193,90,.85)');
   }
+  if (plan) for (const g of plan.groups) if (g.via && g.via.length) {
+    const mem = g.units.map(id => byId[id]).filter(Boolean);
+    if (!mem.length) continue;
+    let [px, py] = P(mem.reduce((a, u) => a + u.x, 0) / mem.length, mem.reduce((a, u) => a + u.y, 0) / mem.length);
+    ctx.strokeStyle = 'rgba(232,193,90,.7)'; ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, py);
+    for (const [x, y] of g.via) { [px, py] = P(x, y); ctx.lineTo(px, py); }
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const [x, y] of g.via) { const [qx, qy] = P(x, y); ctx.fillStyle = 'rgba(232,193,90,.9)'; ctx.beginPath(); ctx.arc(qx, qy, 3, 0, 7); ctx.fill(); }
+  }
   if (plan) for (const g of plan.groups) if (g.position) {
     const [px, py] = P(g.position[0], g.position[1]);
     ctx.strokeStyle = 'rgba(232,193,90,.6)'; ctx.setLineDash([4, 4]);
@@ -264,7 +286,66 @@ function render() {
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
     ctx.fillStyle = '#cfcabe'; ctx.font = '10px system-ui';
     ctx.fillText(`${u.id % 10000} · ${u.men}`, px + Math.max(w / 2, fs * .7) + 3, py + 3);
+    // special abilities active now: the game's icon above the unit, the ring drains as the effect wears off
+    const act = activeAbilities(u.id);
+    act.forEach(([ab, left, dur], i) => {
+      const sz = 20, ix = px - (act.length * (sz + 3)) / 2 + i * (sz + 3), iy = py - Math.max(d, fs) / 2 - sz - 6;
+      const img = icon(ab);
+      if (img.complete && img.naturalWidth) ctx.drawImage(img, ix, iy, sz, sz);
+      else { ctx.fillStyle = col.plan; ctx.fillRect(ix, iy, sz, sz); }
+      ctx.strokeStyle = '#0009'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(ix + sz / 2, iy + sz / 2, sz / 2 + 2, 0, 7); ctx.stroke();
+      ctx.strokeStyle = col.plan; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.arc(ix + sz / 2, iy + sz / 2, sz / 2 + 2, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * left / dur); ctx.stroke();
+    });
   }
+}
+
+// ------------------------------------------------------------ special abilities
+// The game does not report active abilities, so their state comes from when the AI used them and the durations
+// in the game's database (the same rule as the executor: recharge counted from activation).
+const ICONS = {};
+function icon(ab) {
+  if (!ICONS[ab]) { const im = new Image(); im.onload = () => render(); im.src = '/icon/' + encodeURIComponent(ab) + '.png'; ICONS[ab] = im; }
+  return ICONS[ab];
+}
+const AB_NAMES = {stand_firm: 'Hold Firm', active_hiding: 'Stealth', range_effect: 'Increased Range', warcry: 'War Cry',
+  flaming_arrows_ability: 'Flaming Arrows', whistling_arrows_ability: 'Whistling Arrows', second_wind: 'Second Wind'};
+const abName = ab => AB_NAMES[ab] || ab.replace(/_ability$/, '').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+function abState(uid, ab) {  // -> [state, seconds]
+  const tm = (view.timings || {})[ab] || {active: 30, recharge: 180, uses: -1};
+  const uses = (view.abUsed || []).filter(a => a.unit === uid && a.ability === ab);
+  if (!uses.length) return ['ready', 0];
+  if (tm.uses > 0 && uses.length >= tm.uses) return ['used up', 0];
+  const age = view.T - uses[uses.length - 1].t;
+  if (age < tm.active) return ['active', tm.active - age];
+  if (age < tm.recharge) return ['recharging', tm.recharge - age];
+  return ['ready', 0];
+}
+function activeAbilities(uid) {  // -> [[ability, seconds left, duration]]
+  const out = [], seen = new Set();
+  for (const a of view.abUsed || []) {
+    if (a.unit !== uid || seen.has(a.ability)) continue;
+    seen.add(a.ability);
+    const [st, left] = abState(uid, a.ability);
+    if (st === 'active') out.push([a.ability, left, ((view.timings || {})[a.ability] || {active: 30}).active]);
+  }
+  return out;
+}
+function unitType(uid) {
+  const u = (view.units || []).find(u => u.id === uid);
+  return u ? pretty(u.type) : (rep && rep.units[uid] ? pretty(rep.units[uid].type) : '');
+}
+function renderAbilities() {
+  const used = (view.abUsed || []).slice().reverse().slice(0, 14);
+  $('abilities').innerHTML = used.length ? used.map(a => {
+    const [st, left] = abState(a.unit, a.ability);
+    const latest = (view.abUsed || []).filter(b => b.unit === a.unit && b.ability === a.ability).pop() === a;
+    const txt = !latest ? 'used again later' : st === 'active' ? `active · ${left.toFixed(0)}s left` :
+      st === 'recharging' ? `recharging · ${left.toFixed(0)}s` : st;
+    return `<div class="abl"><img src="/icon/${esc(a.ability)}.png" alt=""><span class="t">${a.t.toFixed(0)}s</span>` +
+      `<span><b style="color:var(--ink)">${esc(abName(a.ability))}</b> · ${esc(a.unit)} ${esc(unitType(a.unit))}</span>` +
+      `<span class="st${st === 'active' && latest ? ' on' : ''}">${esc(txt)}</span></div>`;
+  }).join('') : '–';
 }
 function arrow([ax, ay], [bx, by], colr) {
   ctx.strokeStyle = colr; ctx.fillStyle = colr; ctx.lineWidth = 1.5;
@@ -327,7 +408,12 @@ c.addEventListener('mousemove', ev => {
     tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
     return;
   }
-  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.z != null ? ' · alt ' + best.z + ' m' : ''}${best.gar ? ' · garrisoned' : ''}${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}`;
+  const abl = (best.abl || []).map(ab => {
+    const [st, left] = abState(best.id, ab);
+    return `<div class="tipab"><img class="${st === 'ready' || st === 'active' ? '' : 'off'}" src="/icon/${esc(ab)}.png" alt="">` +
+      `${esc(abName(ab))} · ${st}${left ? ' ' + left.toFixed(0) + 's' : ''}</div>`;
+  }).join('');
+  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.z != null ? ' · alt ' + best.z + ' m' : ''}${best.gar ? ' · garrisoned' : ''}${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}${abl}`;
   tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
 });
 c.addEventListener('mouseleave', () => $('tip').style.display = 'none');
@@ -351,6 +437,7 @@ window.addEventListener('resize', render);
 $('symbols').innerHTML = CLASSES.map(([, icon, name]) =>
   `<div><b style="display:inline-block;width:26px;color:var(--ink)">${icon}</b>${name}</div>`).join('') +
   '<div style="margin-top:4px">box = unit frontage, white edge = its front</div>' +
+  '<div style="margin-top:4px">icon above a unit = special ability active (the ring drains as it wears off); dashed line = route (via)</div>' +
   '<div style="margin-top:6px">squares = fortifications: G gate, T tower, K keep, plain = wall; ' +
   'outline = owner, filled = garrisoned, faded = damaged; grey dots = other buildings</div>';
 loadBattles(); pollLive(); requestAnimationFrame(loop);

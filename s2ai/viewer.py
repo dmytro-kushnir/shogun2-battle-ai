@@ -100,6 +100,8 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
         from .server import guess_ai_alliance
         meta["ai"] = guess_ai_alliance(start)
     ai = meta["ai"]
+    from .gamedata import ability_timings, unit_abilities
+    abl = unit_abilities()
     units = {}
     static = list(start["units"]) + [u for m in msgs if m["type"] == "units" for u in m.get("units", [])]
     for u in static:
@@ -107,7 +109,8 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
         units[u["id"]] = {"ai": u["alliance"] == ai, "type": t,
                           "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
                           "missile": (u.get("range") or 0) > 0 and (u.get("ammo0") or 0) > 0,
-                          "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0")}
+                          "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0"),
+                          "abl": abl.get(t) if u["alliance"] == ai else None}
     from .report import buildings_from_message
     from .server import map_buildings
     bmsg = next((m for m in msgs if m["type"] == "buildings"), None)
@@ -137,7 +140,9 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
               "problems": p.get("problems"), "report": p.get("report")}
              for p in _read_jsonl(runtime / f"plans-{bid}.jsonl")]
     orders = _read_jsonl(runtime / f"orders-{bid}.jsonl")
-    return json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
+    ab_used = [{"t": o["t"], "unit": c["unit"], "ability": c["ability"]}
+               for o in orders for c in o.get("orders", []) if c.get("cmd") == "ability"]
+    return json.dumps({"ab_used": ab_used, "timings": ability_timings(),"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
                        "plans": plans, "orders": orders, "general": meta.get("general"),
                        "buildings": buildings, "bstates": bstates, "terrain": terrain.cells()}).encode()
 
@@ -174,6 +179,9 @@ def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str
                     body, ctype = json.dumps(battles()).encode(), "application/json"
                 elif url.path == "/replay":
                     body, ctype = replay(parse_qs(url.query).get("id", [""])[0]), "application/json"
+                elif re.fullmatch(r"/icon/[a-z0-9_]+\.png", url.path):
+                    from .gamedata import ICONS
+                    body, ctype = (ICONS / url.path[len("/icon/"):]).read_bytes(), "image/png"
                 elif url.path in ("/", "/index.html"):
                     body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
                 else:
@@ -184,7 +192,7 @@ def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str
                 return
             self.send_response(200)
             self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "max-age=86400" if ctype == "image/png" else "no-store")
             self.end_headers()
             self.wfile.write(body)
 

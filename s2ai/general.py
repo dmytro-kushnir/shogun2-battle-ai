@@ -44,10 +44,15 @@ How to answer:
   walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   Attackers use climb on a wall section, attack_building on a gate, and occupy on the keep's area.
-- Special abilities: units that have them show "abilities: ..." in the report. Put one in `abilities` to use it
-  now, once; leave `abilities` empty otherwise (most plans). Each has a cooldown, so use it at the moment it
-  matters: rally when units nearby waver or rout, warcry / banzai / rapid_advance right before a charge
-  lands, stand_firm for a line about to break, rapid_volley when the enemy is in range, second_wind for tired units.
+- Routes: `via` = up to 3 waypoints the group goes through before its task. Use it to go AROUND an enemy line
+  instead of through its fire: the ENEMY FORMATION section gives flank routes that stay out of its small-arms
+  range. A unit that is "in range of enemy ..." is being shot at, or can be.
+- Special abilities: units that have them show "abilities: name (ready / ACTIVE / recharging)". Put one in
+  `abilities` to use it now, once; only "ready" ones work; leave `abilities` empty otherwise (most plans). Each
+  lasts tens of seconds and then recharges for minutes, so use it at the moment it matters: rapid_advance /
+  banzai / warcry when the unit is under ~100 m from the enemy it is charging (earlier, the effect is spent
+  before contact and the unit outruns its friends), stand_firm for a line about to break, rally when units nearby
+  waver or rout, rapid_volley when the enemy is in range, second_wind for tired units.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

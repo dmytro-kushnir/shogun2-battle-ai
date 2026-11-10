@@ -7,6 +7,8 @@ Weigh this advice; depart from it when the situation calls for something else. E
 - Let your missile units shoot first; use keep_range_m on them so they step back when enemy melee units come close.
 - Keep a reserve (cavalry or good infantry) behind the line to plug a gap or to hit an enemy unit that breaks through.
 - Use cavalry to strike the flank or rear of enemy units that are already locked in melee with your infantry, then pull it out and do it again. Hunt enemy missile units and the enemy general with it when they are exposed.
+- Against a line of guns (rifles, matchlocks) backed by artillery: do not advance unit by unit. Close in one wave so the fire is spread over many units, and aim the assault at one end of the enemy line, so only part of it can shoot at you, rolling the line up from that flank.
+- Send cavalry wide around a flank (`via`, the ENEMY FORMATION routes) to the artillery and missile units behind the line, and time it: it should arrive when your infantry hits the front, not long before. Hold it out of range until then.
 - Concentrate force: two of your units against one of theirs breaks it quickly, and a routing unit spreads fear to its neighbours.
 - If the enemy is stronger, defend: hold a compact line, let them come to your missiles, and counter-attack where they are thin.
 - If the enemy has many missile units and you have few, do not stand still under fire: close the distance quickly or move out of their range.

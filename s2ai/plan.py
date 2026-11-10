@@ -17,7 +17,7 @@ PLAN_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["name", "units", "task", "target", "building", "position", "facing", "run",
+                "required": ["name", "units", "task", "target", "building", "position", "via", "facing", "run",
                              "engage_within_m", "keep_range_m"],
                 "properties": {
                     "name": {"type": "string", "description": "e.g. 'left wing cavalry'"},
@@ -36,6 +36,11 @@ PLAN_SCHEMA = {
                                                 "FORTIFICATIONS (the number after 'b')"},
                     "position": {"type": ["array", "null"], "items": {"type": "number"}, "minItems": 2,
                                  "maxItems": 2, "description": "move/hold: [x, y] where the group's centre goes"},
+                    "via": {"type": ["array", "null"], "maxItems": 3,
+                            "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                            "description": "optional route: up to 3 [x, y] waypoints the group goes through first "
+                                           "(e.g. wide around an enemy flank), then it does its task; null = "
+                                           "straight there"},
                     "facing": {"type": ["number", "null"],
                                "description": "move/hold: compass degrees the line faces; null = towards the enemy"},
                     "run": {"type": "boolean"},
@@ -110,10 +115,14 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
         if task in ("move", "occupy") and pos is None:
             problems.append(f"group '{g.get('name')}': {task} without a position; holding")
             task = "hold"
+        via = []
+        for w in g.get("via") if isinstance(g.get("via"), list) else []:
+            if isinstance(w, list) and len(w) == 2 and None not in (_num(w[0]), _num(w[1])):
+                via.append([_num(w[0]), _num(w[1])])
         groups.append({
             "name": str(g.get("name") or "group")[:60], "units": units, "task": task, "target": target,
             "building": building,
-            "position": pos, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
+            "position": pos, "via": via[:3] or None, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
             "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
             "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),
         })

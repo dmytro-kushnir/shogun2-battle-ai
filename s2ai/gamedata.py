@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import struct
+import zlib
 from pathlib import Path
 
 log = logging.getLogger("s2ai.gamedata")
@@ -17,6 +18,8 @@ log = logging.getLogger("s2ai.gamedata")
 REPO = Path(__file__).resolve().parent.parent
 CACHE = REPO / "runtime" / "unit_abilities.json"
 JUNCTIONS = "db\\unit_to_unit_abilities_junctions_tables\\unit_to_unit_abilities_junctions"
+TIMINGS = "db\\unit_special_abilities_tables\\unit_special_abilities"
+ICONS = REPO / "runtime" / "icons"
 
 # Abilities the general may use: they act on the unit itself or around it, so perform_special_ability(name) needs
 # no target. (Inspire Unit and Regroup Position need a clicked target; Stand and Fight pins the general down;
@@ -80,19 +83,21 @@ def _lz4_block(src: bytes, size: int) -> bytes:
     return bytes(out[:size])
 
 
-def read_pack_entry(pack: Path, name: str) -> bytes | None:
-    """One file from a PFHs (CE, LZ4 entries) or PFH3/PFH4 pack, or None if it is not there."""
+def read_pack_entries(pack: Path, names: list[str]) -> dict[str, bytes]:
+    """Files from a PFHs (CE, LZ4 entries) or PFH3/PFH4 pack in one pass: {name as asked: bytes}; missing ones are
+    left out."""
+    want = {n.lower(): n for n in names}
+    found: dict[str, bytes] = {}
     with pack.open("rb") as f:
         hdr = f.read(32)
         magic = hdr[:4]
         if magic not in (b"PFHs", b"PFH3", b"PFH4"):
-            return None
+            return found
         typ, _, psize, count, isize = struct.unpack_from("<5I", hdr, 4)
         f.seek(32 + psize)
         idx = f.read(isize)
         data_start = 32 + psize + isize
         p, off = 0, data_start
-        want = name.lower()
         for _ in range(count):
             if magic == b"PFHs":
                 eoff, size, stored = struct.unpack_from("<QII", idx, p)
@@ -103,13 +108,20 @@ def read_pack_entry(pack: Path, name: str) -> bytes | None:
                 off += size
                 p += 4 + (4 if typ & 0x40 else 0)
             end = idx.index(b"\0", p)
-            ename = idx[p:end].decode("latin1")
+            ename = idx[p:end].decode("latin1").lower()
             p = end + 1
-            if ename.lower() == want:
+            if ename in want:
                 f.seek(eoff)
                 raw = f.read(stored)
-                return _lz4_block(raw, size) if magic == b"PFHs" else raw
-    return None
+                found[want[ename]] = _lz4_block(raw, size) if magic == b"PFHs" else raw
+                if len(found) == len(want):
+                    break
+    return found
+
+
+def read_pack_entry(pack: Path, name: str) -> bytes | None:
+    """One file from a pack, or None if it is not there."""
+    return read_pack_entries(pack, [name]).get(name)
 
 
 def parse_junctions(b: bytes) -> dict[str, list[str]]:
@@ -139,35 +151,137 @@ def parse_junctions(b: bytes) -> dict[str, list[str]]:
     return out
 
 
-def unit_abilities() -> dict[str, list[str]]:
-    """{unit type: usable special abilities} from the installed game (cached). Empty if the game is not found."""
+def parse_timings(b: bytes, keys) -> dict[str, dict]:
+    """db/unit_special_abilities -> {ability: {active, recharge, uses}} for the given keys. Each row starts with the
+    key, then active time (f32 s), recharge time (f32 s) and number of uses (i32, -1 = unlimited); the rest of the
+    row has optional fields, so rows are found by their key instead of being walked one by one."""
+    out = {}
+    for k in keys:
+        i = b.find(struct.pack("<H", len(k)) + k.encode("utf-16le"))
+        if i < 0:
+            continue
+        active, recharge, uses = struct.unpack_from("<ffi", b, i + 2 + 2 * len(k))
+        if 0 < active < 3600 and 0 <= recharge < 3600:
+            out[k] = {"active": round(active, 1), "recharge": round(recharge, 1), "uses": uses}
+    return out
+
+
+CACHE_VERSION = 2
+
+
+def _data_packs() -> list[Path]:
     from .gamepaths import data_dirs
-    packs = sorted((d / "data.pack" for d in data_dirs()), key=lambda p: "remasteredce" not in str(p).lower())
+    return sorted((d / "data.pack" for d in data_dirs()), key=lambda p: "remasteredce" not in str(p).lower())
+
+
+def game_data() -> dict:
+    """{"units": {unit type: usable abilities}, "timings": {ability: {active, recharge, uses}}} from the installed
+    game (cached in runtime/). Empty if the game is not found."""
+    packs = _data_packs()
     stamp = [[str(p), p.stat().st_mtime] for p in packs]
     try:
         cached = json.loads(CACHE.read_text(encoding="utf-8"))
-        if cached.get("packs") == stamp:
-            return cached["units"]
+        if cached.get("packs") == stamp and cached.get("v") == CACHE_VERSION:
+            return cached
     except (OSError, ValueError, KeyError):
         pass
     units: dict[str, list[str]] = {}
+    timings: dict[str, dict] = {}
     for pack in reversed(packs):  # Remastered CE last: its rows win
         try:
-            raw = read_pack_entry(pack, JUNCTIONS)
-            if raw is None:
-                continue
-            units.update(parse_junctions(raw))
+            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS])
+            if JUNCTIONS in got:
+                units.update(parse_junctions(got[JUNCTIONS]))
+            if TIMINGS in got:
+                timings.update(parse_timings(got[TIMINGS], ABILITIES))
         except (OSError, ValueError, struct.error) as e:
             log.warning("could not read unit abilities from %s: %s", pack, e)
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
+    data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings}
     try:
         CACHE.parent.mkdir(exist_ok=True)
-        CACHE.write_text(json.dumps({"packs": stamp, "units": units}), encoding="utf-8")
+        CACHE.write_text(json.dumps(data), encoding="utf-8")
     except OSError:
         pass
-    log.info("unit abilities: %d unit types with usable special abilities", len(units))
-    return units
+    log.info("game data: %d unit types with usable special abilities, timings for %d abilities",
+             len(units), len(timings))
+    return data
+
+
+def unit_abilities() -> dict[str, list[str]]:
+    """{unit type: usable special abilities}."""
+    return game_data()["units"]
+
+
+def ability_timings() -> dict[str, dict]:
+    """{ability: {"active": s, "recharge": s, "uses": n or -1}}."""
+    return game_data()["timings"]
+
+
+# ---------------------------------------------------------------- icons (for the battle map)
+
+def tga_to_png(b: bytes) -> bytes:
+    """Truevision TGA (uncompressed or RLE, 24/32 bit - what the game's UI icons use) -> PNG."""
+    id_len, cmap_type, img_type = b[0], b[1], b[2]
+    w, h, bpp, desc = struct.unpack_from("<HHBB", b, 12)
+    if cmap_type or img_type not in (2, 10) or bpp not in (24, 32):
+        raise ValueError(f"unsupported TGA (type {img_type}, {bpp} bpp)")
+    px, n = bpp // 8, w * h
+    p = 18 + id_len
+    if img_type == 2:
+        data = b[p:p + n * px]
+    else:
+        out = bytearray()
+        while len(out) < n * px:
+            c = b[p]
+            p += 1
+            if c & 0x80:
+                out += b[p:p + px] * ((c & 0x7F) + 1)
+                p += px
+            else:
+                k = ((c & 0x7F) + 1) * px
+                out += b[p:p + k]
+                p += k
+        data = bytes(out[:n * px])
+    rows = [data[r * w * px:(r + 1) * w * px] for r in range(h)]
+    if not desc & 0x20:  # origin bottom-left
+        rows.reverse()
+    raw = bytearray()
+    for r in rows:
+        raw.append(0)
+        for i in range(0, len(r), px):  # BGR(A) -> RGBA
+            raw += bytes((r[i + 2], r[i + 1], r[i], r[i + 3] if px == 4 else 255))
+
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+def ability_icons() -> Path:
+    """The game's button icons of the usable abilities as runtime/icons/<ability>.png (made once). -> the folder."""
+    ICONS.mkdir(parents=True, exist_ok=True)
+    missing = [a for a in ABILITIES if not (ICONS / f"{a}.png").exists()]
+    if not missing:
+        return ICONS
+    names = {a: f"ui\\battle ui\\button icons\\{a}_icon.tga" for a in missing}
+    for pack in _data_packs():  # Remastered CE first
+        try:
+            got = read_pack_entries(pack, list(names.values()))
+        except OSError as e:
+            log.warning("could not read icons from %s: %s", pack, e)
+            continue
+        for a, name in list(names.items()):
+            if name in got:
+                try:
+                    (ICONS / f"{a}.png").write_bytes(tga_to_png(got[name]))
+                    del names[a]
+                except (ValueError, struct.error, IndexError) as e:
+                    log.warning("icon %s: %s", a, e)
+        if not names:
+            break
+    return ICONS
 
 
 if __name__ == "__main__":
@@ -175,3 +289,5 @@ if __name__ == "__main__":
     ua = unit_abilities()
     for u in sorted(ua)[:15]:
         print(u, ua[u])
+    print(ability_timings())
+    print(sorted(p.name for p in ability_icons().glob("*.png")))

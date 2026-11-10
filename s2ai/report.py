@@ -196,17 +196,96 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> st
     return line + extra
 
 
+def shooters(u: U, enemies: list[U]) -> tuple[int, int]:
+    """-> (enemy artillery, enemy small-arms units) that have ammunition and can reach u from where they stand."""
+    art = arms = 0
+    for e in enemies:
+        if e.missile and e.fighting_fit and (e.ammo is None or e.ammo > 0) and dist(u, e) <= e.range:
+            if e.kind == "art":
+                art += 1
+            else:
+                arms += 1
+    return art, arms
+
+
+def fire_tag(u: U, enemies: list[U]) -> str:
+    art, arms = shooters(u, enemies)
+    parts = ([f"{arms} missile units"] if arms else []) + ([f"{art} artillery"] if art else [])
+    return f" | in range of enemy {', '.join(parts)}" if parts else ""
+
+
+def formation_section(theirs: list[U], ours: list[U]) -> list[str]:
+    """The enemy's array: which way it faces, its front line and flank ends, what stands behind it, and routes
+    around each flank that stay out of reach of its small arms (for `via`)."""
+    fit = [e for e in theirs if e.fighting_fit and not e.garrisoned]
+    ours = [u for u in ours if u.fighting_fit]
+    if len(fit) < 3 or not ours:
+        return []
+    ex, ey = centre(fit)
+    ox, oy = centre(ours)
+    sx = sum(math.sin(math.radians(e.h)) for e in fit)
+    sy = sum(math.cos(math.radians(e.h)) for e in fit)
+    face = math.degrees(math.atan2(sx, sy)) % 360 if math.hypot(sx, sy) / len(fit) > 0.6 \
+        else bearing(ex, ey, ox, oy)
+    fx, fy = math.sin(math.radians(face)), math.cos(math.radians(face))
+    rx, ry = math.sin(math.radians(face + 90)), math.cos(math.radians(face + 90))
+    depth = lambda x, y: (x - ex) * fx + (y - ey) * fy
+    lat = lambda x, y: (x - ex) * rx + (y - ey) * ry
+    world = lambda la, de: (ex + rx * la + fx * de, ey + ry * la + fy * de)
+    lead = max(depth(e.x, e.y) for e in fit)
+    front = [e for e in fit if depth(e.x, e.y) > lead - 40 and e.kind != "art"] or \
+        [e for e in fit if depth(e.x, e.y) > lead - 40]
+    front.sort(key=lambda e: lat(e.x, e.y))
+    behind = [e for e in fit if e not in front]
+    arms = [e for e in fit if e.missile and e.kind != "art" and (e.ammo is None or e.ammo > 0)]
+    arty = [e for e in fit if e.missile and e.kind == "art" and (e.ammo is None or e.ammo > 0)]
+    reach = max((e.range for e in arms), default=0.0)
+    margin = max(reach, 40.0) + 40.0
+    rear = min(depth(e.x, e.y) for e in fit)
+
+    def route(end: U, side: int) -> list[tuple[float, float]]:
+        la = lat(end.x, end.y) + side * margin
+        for _ in range(15):  # push outward until no enemy small arms reach either point
+            pts = [world(la, lead + 30), world(la, rear - 50)]
+            if all(math.hypot(px - e.x, py - e.y) > e.range + 15 for px, py in pts for e in arms):
+                break
+            la += side * 20
+        return pts
+    out = ["", f"ENEMY FORMATION: faces {compass(face)} ({face:.0f}). Front line: {len(front)} units, "
+               f"{abs(lat(front[-1].x, front[-1].y) - lat(front[0].x, front[0].y)):.0f} m wide, from "
+               f"{front[0].id} at ({front[0].x:.0f},{front[0].y:.0f}) to {front[-1].id} at "
+               f"({front[-1].x:.0f},{front[-1].y:.0f})."]
+    if behind:
+        bx, by = centre(behind)
+        out.append(f"  Behind the front: {', '.join(f'{e.id} {e.kind}' for e in behind[:10])}"
+                   f"{' ...' if len(behind) > 10 else ''} around ({bx:.0f},{by:.0f}).")
+    if arms or arty:
+        out.append(f"  Its missile infantry/cavalry reach {reach:.0f} m"
+                   + (f"; its artillery {max(e.range for e in arty):.0f} m" if arty else "") + ".")
+    routes = []
+    for end, side in ((front[0], -1), (front[-1], 1)):
+        p1, p2 = route(end, side)
+        routes.append(f"{compass(bearing(ex, ey, *p1))} flank (past {end.id}): via ({p1[0]:.0f},{p1[1]:.0f}) "
+                      f"then ({p2[0]:.0f},{p2[1]:.0f})")
+    out.append("  Routes around its flanks that stay out of its small-arms range (not artillery range): "
+               + "; ".join(routes) + ".")
+    return out
+
+
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
           plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None,
-          morale=None, abilities: dict[str, list[str]] | None = None) -> tuple[str, list[U]]:
-    """abilities: {unit type: usable special abilities} (gamedata.unit_abilities)."""
+          morale=None, abilities: dict[str, list[str]] | None = None,
+          ability_state=None) -> tuple[str, list[U]]:
+    """abilities: {unit type: usable special abilities} (gamedata.unit_abilities); ability_state(unit id, ability)
+    -> text with its state, e.g. "rally (ready)" (Executor.ability_text)."""
     units = merge(static, state)
     abilities = abilities or {}
 
     def ab_tag(u: U) -> str:
         have = abilities.get(u.type) if u.fighting_fit else None
-        txt = f" | abilities: {', '.join(have)}" if have else ""
-        return txt + (f" | USING {u.ability}" if u.ability else "")
+        if not have:
+            return ""
+        return " | abilities: " + ", ".join(ability_state(u.id, a) if ability_state else a for a in have)
     from .morale import tag  # morale.py builds on this module
     risk = morale.assess(units) if morale is not None else {}
     mtag = lambda u: tag(risk, u.id)
@@ -224,23 +303,27 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append(f"Enemy: {len(fit_theirs)} fighting units, {men_e} men, centre ({ex:.0f},{ey:.0f}), "
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
-    out.extend(fort_section(fortifications(buildings), ai))
+    forts = fortifications(buildings)
+    out.extend(fort_section(forts, ai))
+    if not forts:  # in a siege the castle is the formation
+        out.extend(formation_section(theirs, ours))
     if terrain is not None:
         out.extend(terrain.section())
     out.append("")
     out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
-        out.append(unit_line(u, fit_theirs, show_nearest=True, extra=mtag(u) + ab_tag(u)))
+        out.append(unit_line(u, fit_theirs, show_nearest=True,
+                             extra=mtag(u) + (fire_tag(u, fit_theirs) if u.fighting_fit else "") + ab_tag(u)))
     ours_ab = sorted({a for u in ours if u.fighting_fit for a in abilities.get(u.type, [])})
     if ours_ab:
         from .gamedata import ABILITIES
-        out.append("  Special abilities (use with `abilities` in the plan; each has a cooldown):")
+        out.append("  Special abilities (use with `abilities` in the plan; only when ready - each lasts a while, "
+                   "then recharges):")
         out.extend(f"    {a}: {ABILITIES.get(a, '')}" for a in ours_ab)
     out.append("")
     out.append("ENEMY UNITS (closest to your army first):")
     for e in sorted(theirs, key=lambda e: math.hypot(e.x - ox, e.y - oy)):
-        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False,
-                             extra=mtag(e) + (f" | USING {e.ability}" if e.ability else "")))
+        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False, extra=mtag(e)))
     if morale is not None:
         out.append("")
         out.append("(morale risk: an estimate from losses, flanks, local numbers, the general and routing friends - "
@@ -265,5 +348,6 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
                     "garrison": f"garrison b{g.get('building')}", "climb": f"climb b{g.get('building')}",
                     "attack_building": f"attack building b{g.get('building')}",
                     "occupy": f"occupy {g['position']}"}.get(g["task"], g["task"])
-            out.append(f"  - {g['name']}: {g['units']} {what}")
+            via = f" via {' -> '.join(f'({w[0]:.0f},{w[1]:.0f})' for w in g['via'])}" if g.get("via") else ""
+            out.append(f"  - {g['name']}: {g['units']}{via} {what}")
     return "\n".join(out), units

@@ -21,7 +21,7 @@ import webbrowser
 
 from . import report
 from .executor import Executor
-from .gamedata import unit_abilities
+from .gamedata import ability_icons, ability_timings, unit_abilities
 from .link import GameLink
 from .plan import validate
 from .viewer import Board, lan_addresses, serve
@@ -79,7 +79,8 @@ class GeneralCommander:
 
     def __init__(self, ai: int, general, battle_id: str, board: Board, link: GameLink):
         self.ai, self.general, self.battle_id, self.board, self.link = ai, general, battle_id, board, link
-        self.executor = Executor(ai)
+        self.timings = ability_timings()  # {ability: {active, recharge, uses}}, from the game's database
+        self.executor = Executor(ai, self.timings)
         self.results: queue.Queue = queue.Queue()
         self.busy = False
         self.next_plan_t = 0.0
@@ -106,11 +107,19 @@ class GeneralCommander:
         if self.executor.plan is None:
             return None
         self.executor.set_buildings(battle.buildings)
-        return self.executor.tick(units, t)
+        n = len(self.executor.ability_log)
+        decision = self.executor.tick(units, t)
+        if len(self.executor.ability_log) != n:
+            for a in self.executor.ability_log[n:]:
+                self.board.note(f"t={t:.0f}s {a['unit']} uses {a['ability']}")
+            self.board.update(ab_used=list(self.executor.ability_log))
+        return decision
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
-                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain, battle.morale, self.abilities)
+                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain,
+                               battle.morale, self.abilities,
+                               ability_state=lambda uid, a: self.executor.ability_text(uid, a, t))
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -134,7 +143,7 @@ class GeneralCommander:
         forts = {f["id"] for f in report.fortifications(battle.buildings)}
         by_id = {u.id: self.abilities.get(u.type, []) for u in units if u.alliance == self.ai}
         plan, problems = validate(raw, ours, enemies, forts, by_id)
-        self.executor.set_plan(plan, units, t)
+        problems += self.executor.set_plan(plan, units, t)
         self.plan_t = t
         self.plans += 1
         self.next_plan_t = t + plan["next_plan_in_s"]
@@ -179,6 +188,11 @@ def main() -> None:
         general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
         log.info("general: %s", general.describe())
 
+    try:
+        ability_icons()  # the game's ability icons for the map, extracted once into runtime/icons
+    except OSError as e:
+        log.warning("ability icons: %s", e)
+    abl = unit_abilities()
     link = GameLink()
     commander = None
     battle_id = None
@@ -202,7 +216,8 @@ def main() -> None:
                                    for a in msg["armies"])
                 log.info("battle %s: %d units [%s]; commanding alliance %d", b.id, len(msg["units"]), armies, ai)
                 desc = general.describe() if general else "demo commander"
-                board.update(battle=b.id, ai=ai, plan=None, plans=0, orders=[], general=desc)
+                board.update(battle=b.id, ai=ai, plan=None, plans=0, orders=[], general=desc, ab_used=[],
+                             timings=ability_timings())
                 # for the history view: which side we commanded, and with what
                 (link.runtime / f"meta-{b.id}.json").write_text(json.dumps({"ai": ai, "general": desc}))
                 board.note(f"battle {b.id} started, commanding alliance {ai}")
@@ -245,7 +260,8 @@ def main() -> None:
                     {"id": u.id, "x": round(u.x, 1), "y": round(u.y, 1), "h": round(u.h), "w": u.w, "men": u.men,
                      "men0": u.men0, "type": u.type,
                      "ai": u.alliance == ai, "kind": u.kind, "missile": u.missile, "gen": u.general,
-                     "rout": u.routing or u.shattered, "ctl": u.id in take, "z": round(u.z, 1), "gar": u.garrisoned}
+                     "rout": u.routing or u.shattered, "ctl": u.id in take, "z": round(u.z, 1), "gar": u.garrisoned,
+                     "abl": abl.get(u.type) if u.alliance == ai else None}
                     for u in units if u.alive], buildings=map_buildings(b.buildings, ai))
                 if last_tick % 10 == 0:  # every 5 s: the learned ground heights
                     board.update(terrain=b.terrain.cells())

@@ -14,7 +14,7 @@ sys.path.insert(0, str(REPO))
 
 from s2ai import report  # noqa: E402
 from s2ai.executor import Executor  # noqa: E402
-from s2ai.gamedata import unit_abilities  # noqa: E402
+from s2ai.gamedata import ability_timings, unit_abilities  # noqa: E402
 from s2ai.general import ClaudeCodeGeneral  # noqa: E402
 from s2ai.link import GameLink  # noqa: E402
 from s2ai.plan import validate  # noqa: E402
@@ -44,7 +44,9 @@ for line in pathlib.Path(args.stream).read_text().splitlines():
 b = link.battle
 ai = args.ai or guess_ai_alliance(start)
 abilities = unit_abilities()
-text, units = report.build(b.static, b.state, ai, b.events, None, None, b.buildings, b.terrain, b.morale, abilities)
+ex = Executor(ai, ability_timings())
+text, units = report.build(b.static, b.state, ai, b.events, None, None, b.buildings, b.terrain, b.morale, abilities,
+                           ability_state=lambda uid, a: ex.ability_text(uid, a, b.state["t"]))
 print(text)
 print("\n" + "=" * 100)
 general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
@@ -56,10 +58,9 @@ plan, problems = validate(raw, {u.id for u in units if u.alliance == ai}, {u.id 
 state = b.state
 print(f"PLAN in {info['seconds']}s, {info['tokens_in']} in / {info['tokens_out']} out tokens, ~${info['api_equiv_usd']:.3f} API-equivalent")
 print(json.dumps(plan, indent=1))
+problems += ex.set_plan(plan, units, state["t"])
 for p in problems:
     print("PROBLEM:", p)
-ex = Executor(ai)
-ex.set_plan(plan, units, state["t"])
 take, orders = ex.tick(units, state["t"])
 print(f"\nexecutor: controls {len(take)} units, sends {len(orders)} orders, e.g.:")
 for o in orders[:8]:

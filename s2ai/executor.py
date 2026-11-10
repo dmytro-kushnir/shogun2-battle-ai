@@ -12,7 +12,8 @@ from .report import U, bearing, building_kind, dist
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 SPACING_EXTRA_M = 6.0   # gap between units in a line
 DEFAULT_WIDTH_M = 30.0
-ABILITY_REPEAT_S = 15.0
+VIA_REACHED_M = 30.0     # a unit counts as through a waypoint this close to it
+DEFAULT_TIMING = {"active": 30.0, "recharge": 180.0, "uses": -1}
 
 
 def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float]) -> list[tuple[float, float]]:
@@ -31,8 +32,9 @@ def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float])
 
 
 class Executor:
-    def __init__(self, ai: int):
+    def __init__(self, ai: int, timings: dict[str, dict] | None = None):
         self.ai = ai
+        self.timings = timings or {}  # ability -> {active, recharge, uses} from the game's database
         self.plan: dict | None = None
         self.plan_t = 0.0
         self.slots: dict[int, tuple[float, float, float]] = {}  # unit -> (x, y, facing) of its group's line
@@ -41,15 +43,57 @@ class Executor:
         self.last_orders: list[dict] = []
         self.buildings: dict[int, dict] = {}                   # id -> building (from the bridge), for sieges
         self.pending_abilities: list[dict] = []                # from the latest plan, sent on the next tick
-        self.ability_used: dict[tuple[int, str], float] = {}   # (unit, ability) -> battle time last sent
+        self.ability_used: dict[tuple[int, str], list[float]] = {}  # (unit, ability) -> battle times sent
+        self.ability_log: list[dict] = []                      # every ability sent: {t, unit, ability}
+        self.via_slots: dict[int, list[tuple[float, float, float]]] = {}  # unit -> its spots at the group's waypoints
+        self.via_reached: dict[int, list[tuple[float, float]]] = {}       # unit -> waypoints it has been through
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
 
-    def set_plan(self, plan: dict, units: list[U], t: float) -> None:
+    # ---------------------------------------------------------------- special abilities
+    # The game does not report which ability is active (current_special_ability() said "none" all through a battle
+    # in which units used them), so the state comes from what was sent and the durations in the game's database.
+    # Recharge is counted from activation.
+
+    def ability_status(self, uid: int, ability: str, t: float) -> tuple[str, float]:
+        """-> ("ready", 0) | ("active", seconds left) | ("recharging", seconds until ready) | ("used up", 0)."""
+        used = self.ability_used.get((uid, ability))
+        if not used:
+            return "ready", 0.0
+        tm = self.timings.get(ability, DEFAULT_TIMING)
+        if tm.get("uses", -1) > 0 and len(used) >= tm["uses"]:
+            return "used up", 0.0
+        age = t - used[-1]
+        if age < tm["active"]:
+            return "active", tm["active"] - age
+        if age < tm["recharge"]:
+            return "recharging", tm["recharge"] - age
+        return "ready", 0.0
+
+    def ability_text(self, uid: int, ability: str, t: float) -> str:
+        st, left = self.ability_status(uid, ability, t)
+        if st == "active":
+            return f"{ability} (ACTIVE, {left:.0f}s left)"
+        if st == "recharging":
+            return f"{ability} (recharging, ready in {left:.0f}s)"
+        if st == "used up":
+            return f"{ability} (used up)"
+        return f"{ability} (ready)"
+
+    def set_plan(self, plan: dict, units: list[U], t: float) -> list[str]:
+        """-> problems (abilities that are not ready are dropped)."""
         self.plan, self.plan_t = plan, t
         self.slots = {}
-        self.pending_abilities = list(plan.get("abilities") or [])
+        problems = []
+        self.pending_abilities = []
+        for a in plan.get("abilities") or []:
+            st, left = self.ability_status(a["unit"], a["ability"], t)
+            if st == "ready":
+                self.pending_abilities.append(a)
+            else:
+                problems.append(f"ability {a['ability']} on {a['unit']}: {st}"
+                                + (f", {left:.0f}s" if left else "") + "; not sent")
         by_id = {u.id: u for u in units}
         enemies = [u for u in units if u.alliance != self.ai and u.fighting_fit]
         ecx = sum(e.x for e in enemies) / len(enemies) if enemies else 0.0
@@ -71,6 +115,38 @@ class Executor:
             members.sort(key=lambda u: (u.x - cx) * rx + (u.y - cy) * ry)
             for u, (sx, sy) in zip(members, line_slots(len(members), cx, cy, facing, [u.w for u in members])):
                 self.slots[u.id] = (sx, sy, facing)
+        # waypoints: each unit gets its own spot at every waypoint (a line across the direction of travel), so a
+        # group goes around a flank side by side instead of piling onto one point
+        self.via_slots = {}
+        for g in plan["groups"]:
+            members = [by_id[i] for i in g["units"] if i in by_id]
+            if not g.get("via") or not members:
+                continue
+            px, py = sum(u.x for u in members) / len(members), sum(u.y for u in members) / len(members)
+            for wx, wy in g["via"]:
+                travel = bearing(px, py, wx, wy)
+                rad = math.radians(travel)
+                rx, ry = math.sin(rad + math.pi / 2), math.cos(rad + math.pi / 2)
+                members.sort(key=lambda u: (u.x - px) * rx + (u.y - py) * ry)
+                for u, (sx, sy) in zip(members, line_slots(len(members), wx, wy, travel, [u.w for u in members])):
+                    self.via_slots.setdefault(u.id, []).append((sx, sy, travel))
+                px, py = wx, wy
+        return problems
+
+    def _via_step(self, u: U, g: dict) -> dict | None:
+        """The move to the unit's next waypoint, or None when it has been through all of them. A waypoint counts as
+        passed if the unit was ever within VIA_REACHED_M of it - plans are often repeated, and a repeated plan must
+        not send units back to a waypoint they already went through."""
+        reached = self.via_reached.setdefault(u.id, [])
+        for (wx, wy), (sx, sy, travel) in zip(g.get("via") or [], self.via_slots.get(u.id, [])):
+            if any(math.hypot(wx - rx, wy - ry) < VIA_REACHED_M * 1.5 for rx, ry in reached):
+                continue
+            if math.hypot(u.x - sx, u.y - sy) < VIA_REACHED_M:
+                reached.append((wx, wy))
+                continue
+            return {"cmd": "move", "unit": u.id, "x": sx, "y": sy, "facing": travel, "width": u.w or None,
+                    "run": g["run"], "_sig": f"via:{round(sx / 5)}:{round(sy / 5)}:{g['run']}"}
+        return None
 
     def _fort_centre(self) -> tuple[float, float]:
         pts = [(b["x"], b["y"]) for b in self.buildings.values()
@@ -105,13 +181,13 @@ class Executor:
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
-        # special abilities: once per plan, after the unit's movement order; a plan that repeats one within
-        # ABILITY_REPEAT_S (the general often re-sends its last plan) does not fire it again
+        # special abilities: once per plan, after the unit's movement order, and only when ready (the general
+        # often repeats its last plan, abilities included)
         fit = {u.id for u in ours}
         for a in self.pending_abilities:
-            key = (a["unit"], a["ability"])
-            if a["unit"] in fit and t - self.ability_used.get(key, -1e9) > ABILITY_REPEAT_S:
-                self.ability_used[key] = t
+            if a["unit"] in fit and self.ability_status(a["unit"], a["ability"], t)[0] == "ready":
+                self.ability_used.setdefault((a["unit"], a["ability"]), []).append(t)
+                self.ability_log.append({"t": t, "unit": a["unit"], "ability": a["ability"]})
                 orders.append({"cmd": "ability", "unit": a["unit"], "ability": a["ability"]})
         self.pending_abilities = []
         self.last_orders = orders
@@ -145,6 +221,10 @@ class Executor:
 
         if g is None:
             return None  # not in the plan: keep its last order
+        if g.get("via"):
+            step = self._via_step(u, g)
+            if step is not None:
+                return step
         task = g["task"]
         if task == "attack":
             target = by_id.get(g["target"])
