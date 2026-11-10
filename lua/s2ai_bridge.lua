@@ -201,7 +201,7 @@ local function ship_state(id, e)
 		x = p and call(p, "get_x"), y = p and call(p, "get_z"), z = 0,
 		h = call(s, "bearing"), w = SHIP_W,
 		men = call(s, "number_of_men_alive"),
-		hull = call(s, "hull_damage"),
+		hull = call(s, "hull_damage"), sail = call(s, "sail_damage"),
 		rout = call(s, "is_routing"), shat = call(s, "is_shattered"), surr = surrendered,
 		mov = call(s, "is_moving"),
 		gone = surrendered == true,
@@ -426,6 +426,11 @@ local SHIP_HANDLERS = {
 		ship_log_once("attack", "attack_ship ok")
 	end,
 	withdraw = function(uc) uc:withdraw(true) end,
+	-- the shot type's name, as the game's scripts pass it (change_shot_type("flaming_arrows") for archers)
+	shot_type = function(uc, o)
+		uc:change_shot_type(o.shot)
+		ship_log_once("shot_type", "change_shot_type(\"" .. tostring(o.shot) .. "\") ok")
+	end,
 	fire_at_will = function(uc, o) uc:fire_at_will(o.on ~= false) end,
 	halt = function(uc) uc:halt() end,
 }
@@ -498,9 +503,8 @@ local function apply_orders()
 	end
 	-- then the orders
 	for i, o in ipairs(t.orders or {}) do
-		local e = B.units[o.unit]
-		local handler = (e and e.ship) and SHIP_HANDLERS[o.cmd] or HANDLERS[o.cmd]
-		if e and e.ship and not SHIP_HANDLERS[o.cmd] then handler = nil end -- land orders mean nothing to a ship
+		-- in a naval battle every controller is a ship controller (also for a ship sunk since the order was written)
+		local handler = B.naval and SHIP_HANDLERS[o.cmd] or (not B.naval and HANDLERS[o.cmd]) or nil
 		local uc = B.controlled[o.unit]
 		local err
 		if not handler then err = "unknown cmd"

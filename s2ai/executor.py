@@ -88,6 +88,7 @@ class Executor:
         self.melee: dict[int, tuple[float, int, int]] = {}      # cavalry unit -> (in melee since, its men then, target)
         self.pullback: dict[int, tuple[float, float, float, int]] = {}  # cavalry unit -> (x, y, until, target)
         self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
+        self.shot: dict[int, str] = {}                          # ship -> shot type we last told it to load
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -223,6 +224,12 @@ class Executor:
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
+        # ships: load the group's shot type when it changes (the game does not report the loaded one)
+        for u in ours:
+            g = self._group_of(u.id)
+            if u.kind == "ship" and g and g.get("shot") and self.shot.get(u.id) != g["shot"]:
+                self.shot[u.id] = g["shot"]
+                orders.append({"cmd": "shot_type", "unit": u.id, "shot": g["shot"]})
         # special abilities: once per plan, after the unit's movement order, and only when ready (the general
         # often repeats its last plan, abilities included)
         fit = {u.id for u in ours}
@@ -239,6 +246,8 @@ class Executor:
         """What the executor is doing with the unit on its own, for the report."""
         if uid in self.pullback:
             return " | pulling back after its charge, will charge again"
+        if uid in self.shot:
+            return f" | loaded: {self.shot[uid]}"
         return ""
 
     def _hit_and_run(self, u: U, want: dict | None, by_id: dict[int, U], enemies: list[U], t: float) -> dict | None:

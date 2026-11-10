@@ -321,7 +321,82 @@ def parse_uniforms(b: bytes) -> dict[str, str]:
     return out
 
 
-CACHE_VERSION = 4
+# Ships (naval battles). unit_stats_naval version 16 (135 fields; the guns on each deck, crew, speed, armour,
+# hull strength, ...), gun_type_to_projectiles version 1 (gun, projectile, muzzle flash, fire frequency) and
+# projectiles version 5 (shot type, range, damage, armour piercing, incendiary, reload, ...).
+SHIPS_LAYOUT = ("SIIIOOOOOOOOSIIIIISFFFFIFIIIIFFFIIIFFFFFFFFFFFFFFFFFFFFFFBIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIFIIF"
+                "IIFIIFBBBSISSIOSIIFSBFFFFB")
+SHIP_F = {"key": 0, "morale": 1, "guns": (5, 6, 7, 8, 9, 10, 11), "marines": 13, "seamen": 14, "gunners": 15,
+          "fire_resistance": 22, "speed": 28, "armour": 58, "hull": 119, "category": 120, "torpedo": 126,
+          "ram": 127, "boardable": 134}
+GUN_SHOTS_LAYOUT = "SSSF"
+PROJECTILES_LAYOUT = "SSSSOOOSIOSIIIFFFFOOOBBFIIOFFSSOOOOOFFBF"
+SHOT_NAMES = {"solid_shot": "solid shot", "common_shell": "common shell (explosive)",
+              "segment_shell": "segment shell", "segment_shell_improved": "improved segment shell",
+              "torpedo": "torpedo", "bullet": "machine-gun bullets", "round_shot": "round shot",
+              "flaming_arrows_naval": "fire arrows", "arrow": "arrows", "hot_shot": "heated shot"}
+
+
+def parse_ships(b: bytes) -> dict[str, dict]:
+    """db/unit_stats_naval (version 16) -> {ship type: {"_guns": [gun types], crew, speed, armour, hull, ...}}."""
+    if _table_version(b) != 16:
+        raise ValueError(f"unit_stats_naval version {_table_version(b)}, expected 16")
+    out = {}
+    for r in read_rows(b, SHIPS_LAYOUT):
+        f = lambda k: r[SHIP_F[k]]
+        guns = [r[i] for i in SHIP_F["guns"] if r[i]]
+        out[f("key")] = {"ship": True, "_guns": list(dict.fromkeys(guns)), "morale": f("morale"),
+                         "crew": f("marines") + f("seamen") + f("gunners"), "marines": f("marines"),
+                         "speed": f("speed"), "armour": f("armour"), "hull": f("hull"),
+                         "category": ", ".join(x.strip().lower().replace("hull_", "") for x in f("category").split(",")),
+                         "torpedo": f("torpedo") > 0, "ram": round(f("ram"), 2), "boardable": f("boardable")}
+    return out
+
+
+def parse_gun_shots(b: bytes) -> dict[str, list[str]]:
+    """db/gun_type_to_projectiles (version 1) -> {gun type: [projectiles]}."""
+    if _table_version(b) != 1:
+        raise ValueError(f"gun_type_to_projectiles version {_table_version(b)}, expected 1")
+    out: dict[str, list[str]] = {}
+    for r in read_rows(b, GUN_SHOTS_LAYOUT):
+        out.setdefault(r[0], []).append(r[1])
+    return out
+
+
+def parse_projectiles(b: bytes) -> dict[str, dict]:
+    """db/projectiles (version 5) -> {projectile: {shot, range, min_range, damage, reload, ap, incendiary, explodes}}."""
+    if _table_version(b) != 5:
+        raise ValueError(f"projectiles version {_table_version(b)}, expected 5")
+    return {r[0]: {"shot": r[2], "range": r[11], "min_range": r[12], "damage": round(r[17]), "ap": r[18] == "ap",
+                   "incendiary": r[19], "explodes": r[20] == "explode", "reload": r[24]}
+            for r in read_rows(b, PROJECTILES_LAYOUT)}
+
+
+def ship_stats(ships: dict, gun_shots: dict, projectiles: dict) -> dict[str, dict]:
+    """Ships with their shot types: {"shots": {shot type: {range, damage, ...}}} for the main guns (the best of
+    each shot type over the ship's cannon), "secondary": other weapons (machine guns, torpedoes)."""
+    out = {}
+    for key, st in ships.items():
+        shots: dict[str, dict] = {}
+        secondary: dict[str, dict] = {}
+        for gun in st["_guns"]:
+            for pr in gun_shots.get(gun, []):
+                p = projectiles.get(pr)
+                if not p:
+                    continue
+                into = secondary if p["shot"] in ("bullet", "torpedo") else shots
+                cur = into.get(p["shot"])
+                if cur is None or (p["range"], p["damage"]) > (cur["range"], cur["damage"]):
+                    into[p["shot"]] = {k: v for k, v in p.items() if k != "shot"}
+        out[key] = {**{k: v for k, v in st.items() if k != "_guns"}, "shots": shots, "secondary": secondary,
+                    "range": max((x["range"] for x in shots.values()), default=0)}
+    return out
+
+
+CACHE_VERSION = 5
+SHIPS = "db\\unit_stats_naval_tables\\unit_stats_naval"
+GUN_SHOTS = "db\\gun_type_to_projectiles_tables\\gun_type_to_projectiles"
+PROJECTILES = "db\\projectiles_tables\\projectiles"
 STATS = "db\\unit_stats_land_tables\\unit_stats_land"
 ENTITIES = "db\\battle_entities_tables\\battle_entities"
 UNITS = "db\\units_tables\\units"
@@ -375,16 +450,22 @@ def _read_game_data(packs: list[Path], stamp: list) -> dict:
     entities: dict[str, dict] = {}
     names: dict[str, str] = {}
     pictures: dict[str, str] = {}
+    ships: dict[str, dict] = {}
+    gun_shots: dict[str, list[str]] = {}
+    projectiles: dict[str, dict] = {}
     for pack in reversed(packs):  # Remastered CE last: its rows win
         try:
-            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES, UNITS, UNIFORMS])
+            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES, UNITS, UNIFORMS, SHIPS, GUN_SHOTS,
+                                           PROJECTILES])
         except (OSError, ValueError, struct.error, IndexError) as e:  # missing, or a format this does not know
             log.warning("could not read %s: %s", pack, e)
             continue
         for name, parse, into in ((JUNCTIONS, parse_junctions, units),
                                   (TIMINGS, lambda b: parse_timings(b, ABILITIES), timings),
                                   (STATS, parse_unit_stats, stats), (ENTITIES, parse_entities, entities),
-                                  (UNITS, parse_unit_names, names), (UNIFORMS, parse_uniforms, pictures)):
+                                  (UNITS, parse_unit_names, names), (UNIFORMS, parse_uniforms, pictures),
+                                  (SHIPS, parse_ships, ships), (GUN_SHOTS, parse_gun_shots, gun_shots),
+                                  (PROJECTILES, parse_projectiles, projectiles)):
             if name in got:
                 try:
                     into.update(parse(got[name]))
@@ -392,6 +473,7 @@ def _read_game_data(packs: list[Path], stamp: list) -> dict:
                     log.warning("could not read %s from %s: %s", name.rsplit("\\", 1)[-1], pack, e)
     for st in stats.values():  # speeds come from the man's entity, or the horse's for cavalry
         st.update(entities.get(st.pop("_entity", None), {}))
+    stats.update(ship_stats(ships, gun_shots, projectiles))  # ships live with the land units' stats
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
     data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats,

@@ -123,9 +123,13 @@ How to answer:
 - UNIT TYPES (at the start of a conversation) gives each type's stats from the game: compare melee/defence/charge,
   "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
   advance: cavalry covers ~10 m/s, foot ~4 m/s).
-- Naval battles (units of kind "ship"): ships cannot form lines or charge. attack = close with that ship and fight
-  it (the game decides between broadsides and boarding); move = sail to a position; withdraw = leave the battle.
-  Keep ships together so several fire at one enemy, avoid being caught alone, and finish damaged ships first.
+- Naval battles (units of kind "ship"): attack = close with that ship and fight it (the game fires broadsides and
+  may board); move = sail to a position (ships in a group sail in line abreast); withdraw = leave the battle. Each
+  ship shows its gun range, hull damage, which enemy ships can hit it and which it can hit. UNIT TYPES lists every
+  ship's shot types with range, damage and reload. Set a group's `shot` to load one: armour-piercing segment shells
+  against iron-armoured ships, explosive common shells (shorter range, they start fires) against wooden hulls,
+  solid shot for the longest reach where it outranges the rest. Keep ships together so several fire at one enemy,
+  stay at the range where your guns reach and theirs do not when you can, and finish damaged ships first.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

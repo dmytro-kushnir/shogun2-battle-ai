@@ -234,6 +234,7 @@ local function make_fleet(prefix, n, x0, handicap)
                     if speed ~= nil and speed ~= "full sail" then error("bad speed " .. tostring(speed)) end
                     SHIP_CALLS[#SHIP_CALLS + 1] = "goto " .. mine[1].name_ .. " " .. tostring(speed)
                 end,
+                change_shot_type = function(_, shot) SHIP_CALLS[#SHIP_CALLS + 1] = "shot " .. shot end,
                 attack_ship = function(_, t)
                     SHIP_CALLS[#SHIP_CALLS + 1] = "attack_ship " .. mine[1].name_ .. "->" .. t.name_
                 end,
@@ -292,7 +293,8 @@ def naval() -> list[str]:
         # a move at the slower pace, then at full sail
         ai_ids = [u["id"] for u in link.battle.state["units"] if link.battle.static[u["id"]]["alliance"] == 2]
         link.send(ai_ids, [{"cmd": "move", "unit": ai_ids[0], "x": 0, "y": 100, "run": False},
-                           {"cmd": "move", "unit": ai_ids[1], "x": 0, "y": 200, "run": True}])
+                           {"cmd": "move", "unit": ai_ids[1], "x": 0, "y": 200, "run": True},
+                           {"cmd": "shot_type", "unit": ai_ids[2], "shot": "segment_shell"}])
         g.S2AI_Bridge_Tick()
         for msg in link.poll():
             if msg["type"] == "applied" and msg["errors"]:
@@ -306,6 +308,8 @@ def naval() -> list[str]:
         if not any(c.startswith("goto ai") and c.endswith("full sail") for c in calls) or \
                 not any(c.startswith("goto ai") and c.endswith("nil") for c in calls):
             problems.append(f"ship moves not sent as expected: {calls}")
+        if "shot segment_shell" not in calls:
+            problems.append(f"shot type not sent: {calls}")
         s = link.battle.state["units"][0]
         if s.get("hull") != 0.1 or s.get("men") != 60:
             problems.append(f"ship state incomplete: {s}")

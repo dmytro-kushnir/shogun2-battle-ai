@@ -20,7 +20,7 @@ plain Complete Edition.
 | Historical battles from the menu (Kawanakajima, Nagashino, Okehazama, Sekigahara, Nagashima) | ✅ |
 | Campaign battles, including reinforcements arriving mid-battle | ✅ |
 | Sieges | ✅ the general sees walls, gates and towers, mans the walls and assaults them |
-| Naval battles | ❓ not tested |
+| Naval battles | ✅ custom naval battle won (fleet moves and attacks); shot types new, not yet seen in game |
 | Terrain (hills, forests, rivers) | ⚠️ heights only, learned from where units have stood (the game reports no terrain) |
 | Live map and replays in the browser, also from other devices on your network | ✅ |
 

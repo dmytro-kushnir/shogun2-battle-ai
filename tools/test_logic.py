@@ -174,6 +174,22 @@ def test_matchups():
     assert not any(o["cmd"] == "attack" for o in ex.tick([cav, spears], 0)[1])
 
 
+def test_ship_shot_types():
+    ships = [unit(1, 2, 0, 0, "ship", 70, "Boshin_Ironclad_Kotetsu"), unit(9, 1, 0, 800, "ship", 90, "X")]
+    raw = plan_of(group([1], target=9))
+    raw["groups"][0]["shot"] = "segment_shell"
+    plan, _ = validate(raw, {1}, {9}, set(), {})
+    assert plan["groups"][0]["shot"] == "segment_shell", plan
+    bad, _ = validate({**raw, "groups": [{**raw["groups"][0], "shot": "x; os.exit()"}]}, {1}, {9}, set(), {})
+    assert bad["groups"][0]["shot"] is None
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan, ships, 0)
+    o = ex.tick(ships, 0)[1]
+    assert {"cmd": "shot_type", "unit": 1, "shot": "segment_shell"} in o, o
+    assert not any(x["cmd"] == "shot_type" for x in ex.tick(ships, 1)[1])  # loaded once
+    assert "segment_shell" in ex.unit_note(1)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

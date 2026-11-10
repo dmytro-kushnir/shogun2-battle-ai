@@ -18,7 +18,7 @@ class U:
     id: int
     alliance: int
     type: str
-    kind: str          # "cav", "inf", "art"
+    kind: str          # "cav", "inf", "art", "ship"
     missile: bool
     general: bool
     men: int
@@ -37,6 +37,8 @@ class U:
     z: float = 0.0          # altitude, metres
     garrisoned: bool = False
     ability: str = ""       # special ability active right now ("" = none)
+    hull: float | None = None  # ships: hull damage, 0 = intact .. 1
+    sail: float | None = None  # ships: sail damage
 
     @property
     def alive(self) -> bool:
@@ -75,6 +77,7 @@ def merge(static: dict[int, dict], state: dict) -> list[U]:
             ammo=s.get("ammo"), range=st.get("range") or 0.0,
             z=s.get("z") or 0.0, garrisoned=bool(s.get("gar")),
             ability="" if str(s.get("ab") or "none").lower() in ("none", "") else str(s.get("ab")),
+            hull=s.get("hull"), sail=s.get("sail"),
         ))
     return units
 
@@ -189,6 +192,17 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> st
     if u.missile:
         ammo = f" ammo {u.ammo}" if u.ammo is not None else ""
         ammo += f" range {u.range:.0f}m"
+    if u.kind == "ship":  # ships: no altitude or ammunition count; hull and sails instead
+        kind = "ship"
+        ammo = f" guns {u.range:.0f}m" if u.range else ""
+        if u.hull is not None:
+            ammo += f" hull damage {u.hull:.0%}"
+        if u.sail:
+            ammo += f" sails damaged {u.sail:.0%}"
+        return (f"  {u.id:>5} {u.label[:34]:<34} {kind:<6} crew {u.men:>4}/{u.men0:<4} at ({u.x:6.0f},{u.y:6.0f}) "
+                f"heading {u.h:3.0f} {state_word(u, d)}{ammo}"
+                + (f" | nearest enemy {near.id} {d:.0f}m {compass(bearing(u.x, u.y, near.x, near.y))}"
+                   if show_nearest and near is not None else "") + extra)
     line = (f"  {u.id:>5} {u.label[:34]:<34} {kind:<18} {u.men:>4}/{u.men0:<4} at ({u.x:6.0f},{u.y:6.0f}) "
             f"alt {u.z:4.0f} facing {u.h:3.0f} {state_word(u, d)}{' GARRISONED' if u.garrisoned else ''}{ammo}")
     if show_nearest and near is not None:
@@ -209,6 +223,13 @@ def shooters(u: U, enemies: list[U]) -> tuple[int, int]:
 
 
 def fire_tag(u: U, enemies: list[U]) -> str:
+    if u.kind == "ship":  # which enemy ships can hit it, and which it can hit
+        them = [e for e in enemies if e.kind == "ship" and e.range and dist(u, e) <= e.range]
+        mine = sorted((e for e in enemies if u.range and dist(u, e) <= u.range), key=lambda e: dist(u, e))
+        out = f" | in range of enemy ships {', '.join(str(e.id) for e in them)}" if them else ""
+        if mine:
+            out += f" | can hit {', '.join(f'{e.id} ({dist(u, e):.0f}m)' for e in mine[:5])}"
+        return out
     art, arms = shooters(u, enemies)
     parts = ([f"{arms} missile units"] if arms else []) + ([f"{art} artillery"] if art else [])
     return f" | in range of enemy {', '.join(parts)}" if parts else ""
@@ -284,6 +305,9 @@ def unit_types_section(units: list[U], ai: int, stats: dict[str, dict]) -> list[
         if not st:
             continue
         side = ", ".join(([f"yours {mine}"] if mine else []) + ([f"enemy {theirs}"] if theirs else []))
+        if st.get("ship"):
+            lines.append(f"  {pretty_type(t)[:34]} ({side}): {ship_text(st)}")
+            continue
         parts = [f"melee {st['melee']}", f"defence {st['defence']}", f"charge +{st['charge']}",
                  f"armour {st['armour']}", f"morale {st['morale']}"]
         if st.get("vs_cav"):
@@ -298,7 +322,28 @@ def unit_types_section(units: list[U], ai: int, stats: dict[str, dict]) -> list[
     if not lines:
         return []
     return ["", "UNIT TYPES (from the game's database; higher is better; speeds are full running speed, horses "
-                "~10 m/s, men on foot ~4):"] + lines
+                "~10 m/s, men on foot ~4; ships: hull strength, side armour, speed, then each shot type with "
+                "range, damage and reload):"] + lines
+
+
+SHOT_WORDS = {"solid_shot": "solid shot", "common_shell": "common shell", "segment_shell": "segment shell",
+              "segment_shell_improved": "improved segment shell", "round_shot": "round shot"}
+
+
+def ship_text(st: dict) -> str:
+    parts = [f"hull {st['hull']}", f"armour {st['armour']}", f"speed {st['speed']}", f"crew {st['crew']}",
+             st["category"], "can be boarded" if st.get("boardable") else "cannot be boarded"]
+    shots = []
+    for k, x in sorted(st.get("shots", {}).items(), key=lambda kv: -kv[1]["range"]):
+        tags = (["armour-piercing"] if x["ap"] else []) + (["explosive"] if x["explodes"] else []) + \
+               ([f"fire risk {x['incendiary']}"] if x["incendiary"] else [])
+        shots.append(f"{k} {x['range']}m dmg {x['damage']} reload {x['reload']}s"
+                     + (f" ({', '.join(tags)})" if tags else ""))
+    if shots:
+        parts.append("shots: " + "; ".join(shots))
+    for k, x in st.get("secondary", {}).items():
+        parts.append(f"also {'torpedoes' if k == 'torpedo' else 'machine guns'} {x['range']}m")
+    return ", ".join(parts)
 
 
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
@@ -313,6 +358,12 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     keeps it in its conversation, so it is only needed when a conversation starts."""
     units = merge(static, state)
     abilities = abilities or {}
+    for u in units:  # ships: gun range from the game's database (the engine does not report it)
+        if u.kind == "ship":
+            st = (unit_stats or {}).get(u.type) or {}
+            u.range = float(st.get("range") or 0)
+            u.missile = u.range > 0
+    naval = any(u.kind == "ship" for u in units)
 
     def ab_tag(u: U) -> str:
         have = abilities.get(u.type) if u.fighting_fit else None
@@ -336,11 +387,11 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append(f"Enemy: {len(fit_theirs)} fighting units, {men_e} men, centre ({ex:.0f},{ey:.0f}), "
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
-    forts = fortifications(buildings)
+    forts = fortifications(buildings) if not naval else []  # coastal buildings mean nothing to ships
     out.extend(fort_section(forts, ai))
-    if not forts:  # in a siege the castle is the formation
+    if not forts and not naval:  # in a siege the castle is the formation; at sea there are no flanks to ride
         out.extend(formation_section(theirs, ours))
-    if terrain is not None:
+    if terrain is not None and not naval:
         out.extend(terrain.section())
     if static_info and unit_stats:
         out.extend(unit_types_section(units, ai, unit_stats))
@@ -385,5 +436,6 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
                     "attack_building": f"attack building b{g.get('building')}",
                     "occupy": f"occupy {g['position']}"}.get(g["task"], g["task"])
             via = f" via {' -> '.join(f'({w[0]:.0f},{w[1]:.0f})' for w in g['via'])}" if g.get("via") else ""
-            out.append(f"  - {g['name']}: {g['units']}{via} {what}")
+            shot = f", firing {g['shot']}" if g.get("shot") else ""
+            out.append(f"  - {g['name']}: {g['units']}{via} {what}{shot}")
     return "\n".join(out), units

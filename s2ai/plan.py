@@ -2,6 +2,8 @@
 that drops anything that cannot be carried out (unknown units, enemy units in our groups, ...)."""
 from __future__ import annotations
 
+import re
+
 TASKS = ["attack", "move", "hold", "withdraw", "garrison", "climb", "attack_building", "occupy"]
 BUILDING_TASKS = {"garrison", "climb", "attack_building"}
 
@@ -18,7 +20,7 @@ PLAN_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["name", "units", "task", "target", "building", "position", "via", "facing", "run",
-                             "engage_within_m", "keep_range_m"],
+                             "engage_within_m", "keep_range_m", "shot"],
                 "properties": {
                     "name": {"type": "string", "description": "e.g. 'left wing cavalry'"},
                     "units": {"type": "array", "items": {"type": "integer"}, "description": "ids of YOUR units"},
@@ -50,6 +52,9 @@ PLAN_SCHEMA = {
                     "keep_range_m": {"type": "number",
                                      "description": "reflex for missile units: step back when an enemy melee unit "
                                                     "comes this close; 0 = off"},
+                    "shot": {"type": ["string", "null"],
+                             "description": "ships: the shot type to load, one of those listed for the ship "
+                                            "(e.g. solid_shot, common_shell, segment_shell); null = keep"},
                 },
             },
         },
@@ -125,6 +130,7 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
             "position": pos, "via": via[:3] or None, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
             "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
             "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),
+            "shot": g["shot"] if isinstance(g.get("shot"), str) and re.fullmatch(r"[a-z_]{3,40}", g["shot"]) else None,
         })
     abilities = []
     raw_ab = plan.get("abilities")
