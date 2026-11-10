@@ -96,7 +96,7 @@ local FIELDS = {}
 local METHODS = {
     name = function(s) return FIELDS[s].name_ end, position = function(s) return FIELDS[s].pos end,
     capacity = function(s) return FIELDS[s].cap end, alliance_owner_id = function(s) return FIELDS[s].owner end,
-    health = function() return 1 end, currently_garrisoned = function() return false end,
+    health = function(s) return FIELDS[s].hp or 1 end, currently_garrisoned = function() return false end,
     destroy = function() error("the bridge must never call destroy") end,
 }
 -- like the game (run 16): the methods sit directly in the object's metatable (which also serves as __index),
@@ -115,6 +115,12 @@ local function make_building(name, x, z, cap, owner)
     return b
 end
 function MOCK_BUILDING_NAME(b) return FIELDS[b].name_ end
+-- change a building mid-battle (damage, capture): every building whose name contains `part`
+function MOCK_SET_BUILDING(part, key, value)
+    for b, f in pairs(FIELDS) do
+        if type(f.name_) == "string" and f.name_:find(part, 1, true) then f[key] = value end
+    end
+end
 MOCK_FOREIGN_TOUCHED = false
 local foreign = newproxy(true)
 getmetatable(foreign).__index = function(_, k)
@@ -195,6 +201,9 @@ def main() -> bool:
                     g.MOCK_KILL("ai", 1)  # ai1 destroyed: ai2 and ai3 move up in the list
                 if step == 35:
                     g.MOCK_REINFORCE("player", "player3", -320, 200)
+                if step == 40:
+                    g.MOCK_SET_BUILDING("gate", "hp", 0.4)    # the player's guns damage the gate
+                    g.MOCK_SET_BUILDING("wall", "owner", 0)   # and capture a wall section (alliance 1, 0-based)
                 g.MOCK_STEP()
                 tick()
                 for msg in link.poll():
@@ -230,6 +239,12 @@ def main() -> bool:
                 problems.append("the bridge walked the full building list (scenery broke the game in runs 17/18)")
             if sorted(b["name"] for b in blds.values()) != ["castle_02_gate_02", "castle_02_wall_10_01"]:
                 problems.append(f"expected the 2 garrisonable buildings, got {[b['name'] for b in blds.values()]}")
+            # live status: the gate's damage and the captured wall must have reached the server
+            by_nm = {b["name"]: b for b in blds.values()}
+            if by_nm.get("castle_02_gate_02", {}).get("hp") != 0.4:
+                problems.append(f"gate damage not updated: {by_nm.get('castle_02_gate_02')}")
+            if by_nm.get("castle_02_wall_10_01", {}).get("owner") != 1:
+                problems.append(f"wall capture not updated: {by_nm.get('castle_02_wall_10_01')}")
             if gate is not None:
                 ai_id = next(u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2)
                 link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],

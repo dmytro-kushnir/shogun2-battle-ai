@@ -362,7 +362,7 @@ function S2AI_Bridge_Tick()
 		local units = {}
 		for _, id in ipairs(sorted_ids()) do units[#units + 1] = state_record(id, B.units[id]) end
 		local bstate = nil
-		if B.forts and #B.forts > 0 and B.tick % 4 == 1 then bstate = building_states() end -- every 2 s
+		if B.forts and #B.forts > 0 and B.tick % 20 == 3 then bstate = building_states() end -- every 10 s
 		emit({ type = "state", tick = B.tick, t = B.tick * TICK_MS / 1000, gt = call(B.battle, "game_time"),
 			phase = B.phase, units = units, buildings = bstate })
 		apply_orders()
@@ -484,9 +484,36 @@ function scan_buildings() -- assigns the local declared at the top
 	return out
 end
 
--- no periodic building updates yet (a later step, once the static read is proven)
+-- Step 4: the fortifications' changing state (damage, captures, garrisons), re-read every 10 s from the same
+-- garrisonable list the initial read proved safe (runs 20-21), same calls in the same order: [id, health,
+-- owner, garrisoned]. The engine is checked after every update; one failure switches updates off for the rest of
+-- the battle, so they can never take the battle down with them.
 function building_states() -- assigns the local declared at the top
-	return nil
+	if B.bstate_off or not B.forts or #B.forts == 0 then return nil end
+	local list = call(B.battle, "buildings")
+	local n = list and num(call(list, "garrisonable_count")) or 0
+	local out = {}
+	for i = 1, math.min(n, SCAN_LIMIT) do
+		local b = call(list, "garrisonable_item", i)
+		if not looks_like_building(b) then break end
+		local owner_id = call(b, "alliance_owner_id")
+		local cap = call(b, "capacity")
+		local gar = call(b, "currently_garrisoned")
+		local hp = call(b, "health")
+		if (owner_id ~= nil and type(owner_id) ~= "number") or (hp ~= nil and type(hp) ~= "number") then
+			log(string.format("building update: item %d gave a %s / %s - updates stop", i, type(owner_id), type(hp)))
+			B.bstate_off = true
+			break
+		end
+		out[#out + 1] = { i, hp, (owner_id and owner_id >= 0) and (owner_id + 1) or 0, gar == true and 1 or 0 }
+		b = nil
+	end
+	local check = num(call(call(B.battle, "alliances"), "count"))
+	if not check then
+		log("building update: engine check FAILED - building updates switched off for this battle")
+		B.bstate_off = true
+	end
+	return out
 end
 
 -- a fresh garrisonable building for a siege order, used at once and dropped
