@@ -195,7 +195,7 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool) -> str:
 
 
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
-          plan_age_s: float | None, buildings: dict[int, dict] | None = None) -> tuple[str, list[U]]:
+          plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None) -> tuple[str, list[U]]:
     units = merge(static, state)
     ours = [u for u in units if u.alliance == ai and u.alive]
     theirs = [u for u in units if u.alliance != ai and u.alive]
@@ -212,6 +212,8 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
     out.extend(fort_section(fortifications(buildings), ai))
+    if terrain is not None:
+        out.extend(terrain.section())
     out.append("")
     out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):

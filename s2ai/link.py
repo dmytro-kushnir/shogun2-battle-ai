@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .terrain import HeightMap, fort_points
+
 REPO = Path(__file__).resolve().parent.parent
 RUNTIME = REPO / "runtime"
 
@@ -49,6 +51,7 @@ class Battle:
     events: list = field(default_factory=list)
     applied: list = field(default_factory=list)
     buildings: dict[int, dict] | None = None  # id -> {name, x, y, z, cap, owner (1-based, 0 none), hp, mil, gar}
+    terrain: HeightMap = field(default_factory=HeightMap)  # ground heights learned from unit altitudes
 
     @property
     def static(self) -> dict[int, dict]:
@@ -120,6 +123,7 @@ class GameLink:
         if kind == "state":
             self.battle.state = msg
             self.battle.phase = msg.get("phase", self.battle.phase)
+            self.battle.terrain.add_state(msg)
             for i, hp, owner, gar in msg.get("buildings") or []:  # fortifications' changing state, every 2 s
                 b = (self.battle.buildings or {}).get(i)
                 if b is not None:
@@ -131,6 +135,7 @@ class GameLink:
             self.battle.applied.append(msg)
         elif kind == "buildings":  # every building on the map, once: walls, gates, towers, keep, houses
             self.battle.buildings = {b["id"]: b for b in msg.get("buildings", [])}
+            self.battle.terrain.set_forts(fort_points(self.battle.buildings))
         elif kind == "units":  # units that joined after the start (reinforcements): their static info
             have = {u["id"] for u in self.battle.start["units"]}
             self.battle.start["units"].extend(u for u in msg.get("units", []) if u["id"] not in have)

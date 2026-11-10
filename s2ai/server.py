@@ -108,7 +108,7 @@ class GeneralCommander:
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
-                               t - self.plan_t if self.executor.plan else None, battle.buildings)
+                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain)
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -244,6 +244,8 @@ def main() -> None:
                      "ai": u.alliance == ai, "kind": u.kind, "missile": u.missile, "gen": u.general,
                      "rout": u.routing or u.shattered, "ctl": u.id in take, "z": round(u.z, 1), "gar": u.garrisoned}
                     for u in units if u.alive], buildings=map_buildings(b.buildings, ai))
+                if last_tick % 10 == 0:  # every 5 s: the learned ground heights
+                    board.update(terrain=b.terrain.cells())
         time.sleep(POLL_S)
 
 

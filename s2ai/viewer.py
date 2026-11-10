@@ -112,8 +112,13 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
     from .server import map_buildings
     bmsg = next((m for m in msgs if m["type"] == "buildings"), None)
     buildings = map_buildings(buildings_from_message(bmsg), ai)
+    from .terrain import HeightMap, fort_points
+    terrain = HeightMap()
+    terrain.set_forts(fort_points(buildings_from_message(bmsg)))
     frames, events, bstates, last_t = [], [], [], -1.0
     for m in msgs:
+        if m["type"] == "state":
+            terrain.add_state(m)
         if m["type"] == "state" and m.get("buildings"):
             bstates.append({"t": m["t"], "b": m["buildings"]})  # [id, health, owner, garrisoned] every 2 s
         if m["type"] == "state":
@@ -134,7 +139,7 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
     orders = _read_jsonl(runtime / f"orders-{bid}.jsonl")
     return json.dumps({"battle": bid, "ai": ai, "units": units, "frames": frames, "events": events,
                        "plans": plans, "orders": orders, "general": meta.get("general"),
-                       "buildings": buildings, "bstates": bstates}).encode()
+                       "buildings": buildings, "bstates": bstates, "terrain": terrain.cells()}).encode()
 
 
 # ---------------------------------------------------------------- http

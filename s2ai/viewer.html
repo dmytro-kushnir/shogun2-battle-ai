@@ -89,7 +89,7 @@ function buildLive() {
   view = { title: `Live: battle ${live.battle}`,
     sub: `t=${(live.t||0).toFixed(0)}s · phase ${live.phase||'?'} · AI alliance ${live.ai} · ${live.general||''} · plans ${live.plans||0}`,
     units: live.units || [], plan: live.plan, orders: live.orders || [], log: (live.log || []).slice().reverse(),
-    buildings: live.buildings || [] };
+    buildings: live.buildings || [], terrain: live.terrain || [] };
   render();
 }
 async function openReplay(id) {
@@ -123,7 +123,7 @@ function buildReplay() {
   log.sort((a, b) => parseFloat(b.slice(2)) - parseFloat(a.slice(2)));
   view = { title: `Replay: battle ${rep.battle}`,
     sub: `phase ${f.phase||'?'} · AI alliance ${rep.ai} · ${rep.plans.length} plans` + (plan && plan.info ? ` · this plan took ${plan.info.seconds}s` : ''),
-    units, buildings, plan: plan && plan.plan, orders, log, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
+    units, buildings, terrain: rep.terrain || [], plan: plan && plan.plan, orders, log, report: plan ? ((plan.problems||[]).length ? 'PROBLEMS:\n' + plan.problems.join('\n') + '\n\n' : '') + (plan.report || '') : '' };
   $('slider').value = Math.floor(T); $('tlabel').textContent = `${T.toFixed(0)}s`;
   document.querySelectorAll('#plans div').forEach(d => d.classList.toggle('cur', +d.dataset.i === pi));
   render();
@@ -162,6 +162,20 @@ function render() {
   const P = (x, y) => [W / 2 + (x - cx) * s, H / 2 - (y - cy) * s];
   fit = {P, s, units};
 
+  // learned ground heights: low = dark, high = light (only where units have stood)
+  const ter = view.terrain || [];
+  if (ter.length) {
+    let zlo = Infinity, zhi = -Infinity;
+    for (const [, , , z] of ter) { zlo = Math.min(zlo, z); zhi = Math.max(zhi, z); }
+    const span = Math.max(3, zhi - zlo);
+    for (const [x0, y0, size, z] of ter) {
+      const [px, py] = P(x0, y0 + size), k = (z - zlo) / span;
+      ctx.fillStyle = `rgb(${Math.round(34 + 60 * k)},${Math.round(40 + 62 * k)},${Math.round(34 + 34 * k)})`;
+      ctx.fillRect(px, py, size * s + 0.5, size * s + 0.5);
+    }
+    ctx.fillStyle = '#9a968c'; ctx.font = '10px system-ui';
+    ctx.fillText(`ground ${zlo.toFixed(0)}–${zhi.toFixed(0)} m (learned from unit altitudes)`, 8, H - 8);
+  }
   ctx.strokeStyle = '#22262d'; ctx.lineWidth = 1;
   for (let gx = Math.floor((cx - W / 2 / s) / 100) * 100; gx < cx + W / 2 / s; gx += 100) { const [px] = P(gx, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke(); }
   for (let gy = Math.floor((cy - H / 2 / s) / 100) * 100; gy < cy + H / 2 / s; gy += 100) { const [, py] = P(0, gy); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke(); }
