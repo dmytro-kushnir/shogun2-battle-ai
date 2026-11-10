@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\install.ps1  # adds the mod's p
 (`-ExecutionPolicy Bypass` because Windows blocks unsigned scripts by default. If you downloaded a ZIP instead of
 cloning, run `Get-ChildItem -Recurse | Unblock-File` in the folder first.)
 
-`install.ps1` finds the game through Steam. It writes `s2ai_battle.pack` into each data folder of the game
+`install.ps1` finds the game through Steam. It writes a small pack into each data folder of the game (`s2ai_battle.pack`, and `s2ai_battle_rce.pack` for Remastered CE: its launcher refuses two enabled packs with the same name)
 (Complete Edition, and Remastered CE's if installed), plus loose copies of the scripts in it: the game's own
 `frontend_scripted.lua` and five historical battle scripts with the mod's loader added (taken from your copy of
 the game), and `s2ai\custom.battle_script`. Keep the repository where it is after installing: the game loads the

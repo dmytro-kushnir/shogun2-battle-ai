@@ -28,7 +28,10 @@ if ($Repo -match '[^\x20-\x7E]') {
 }
 $RepoLua = ($Repo -replace '\\', '/')
 $Marker = '-- shogun2-battle-ai loader'
-$PackName = 's2ai_battle.pack'
+# One name per data folder: the Remastered CE launcher lists the packs of BOTH folders and refuses to start when
+# two enabled packs share a file name ("duplicate enabled filenames are ambiguous").
+$PackNames = @('s2ai_battle.pack', 's2ai_battle_rce.pack')
+function Get-PackName($d) { if ($d -match '\\RemasteredCE\\data\\?$') { 's2ai_battle_rce.pack' } else { 's2ai_battle.pack' } }
 $Python = Join-Path $Repo '.venv\Scripts\python.exe'
 
 $Targets = @(
@@ -89,9 +92,13 @@ if (-not $DataDirs) { $DataDirs = @(Find-DataDirs) }
 if (-not $DataDirs) { throw 'No Shogun 2 Complete Edition data folder found through Steam; pass -DataDirs.' }
 
 foreach ($d in $DataDirs) {
+    $PackName = Get-PackName $d
+    # our pack under any of our names that does not belong in this folder (also: uninstall removes all)
+    foreach ($name in $PackNames) {
+        $pack = Join-Path $d $name
+        if ((Test-Path $pack) -and ($Uninstall -or $name -ne $PackName)) { Remove-Item $pack; Write-Host "removed  $pack" }
+    }
     if ($Uninstall) {
-        $pack = Join-Path $d $PackName
-        if (Test-Path $pack) { Remove-Item $pack; Write-Host "removed  $pack" }
         foreach ($t in $Targets) { Remove-Ours $d $t.Path }
         continue
     }
