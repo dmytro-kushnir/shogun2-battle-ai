@@ -88,21 +88,23 @@ local scan_buildings, building_states
 
 -- ------------------------------------------------------------------ units
 
--- Stable unit ids. The engine compacts an army's unit list when a unit is destroyed, so a list position does not
--- identify a unit (at Sekigahara, ids built from positions pointed at other units after the first losses). A unit
--- keeps its name (historical battles: "Ukita_Hideie_3"; custom/campaign: "1", "2", ... per army) and its type, so
--- alliance + name + type (+ an occurrence number for exact duplicates) is the key; ids are handed out in order of
--- first sighting: alliance * 10000 + n.
-local function unit_key(a, unit, seen)
-	local key = a .. "|" .. tostring(call(unit, "name")) .. "|" .. tostring(call(unit, "type"))
-	seen[key] = (seen[key] or 0) + 1
-	return key .. "#" .. seen[key]
-end
-
+-- Stable unit ids (alliance * 10000 + n, in order of first sighting). The engine compacts an army's unit list when
+-- a unit is destroyed, so a list position does not identify a unit (at Sekigahara, ids built from positions
+-- pointed at other units after the first losses).
+--
 -- refresh B.units (id -> {unit, army, alliance}) from the battle; cheap, done every tick (reinforcements)
+--
+-- Unit identity follows the unit itself, not a name: run 24 showed that in custom/campaign battles units are
+-- named "1", "2", ... by their PLACE in the army, so when one dies the rest are renamed (ids changed under the
+-- general's feet). Between two scans (0.5 s) a unit moves a few metres at most, so each unit takes the id of the
+-- closest unit of the same type and alliance in the previous scan (a matching name only breaks ties); a unit
+-- with no match within TRACK_MAX_M is new (a reinforcement) and gets a fresh id.
+local TRACK_MAX_M = 40
+
 local function scan()
-	local units, seen = {}, {}
-	B.keys, B.next_n = B.keys or {}, B.next_n or {}
+	local units, current = {}, {}
+	B.next_n = B.next_n or {}
+	B.track = B.track or {}        -- id -> {a, type, name, x, y} from the previous scan
 	local alliances = B.battle:alliances()
 	for a = 1, alliances:count() do
 		local armies = alliances:item(a):armies()
@@ -111,18 +113,41 @@ local function scan()
 			local list = army:units()
 			for u = 1, list:count() do
 				local unit = list:item(u)
-				local key = unit_key(a, unit, seen)
-				local id = B.keys[key]
-				if not id then
-					B.next_n[a] = (B.next_n[a] or 0) + 1
-					id = a * 10000 + B.next_n[a]
-					B.keys[key] = id
-				end
-				units[id] = { unit = unit, army = army, alliance = a, army_index = r }
+				local p = call(unit, "position")
+				current[#current + 1] = { unit = unit, army = army, a = a, r = r,
+					type = tostring(call(unit, "type")), name = tostring(call(unit, "name")),
+					x = p and call(p, "get_x") or 0, y = p and call(p, "get_z") or 0 }
 			end
 		end
 	end
-	B.units = units
+	-- all candidate pairs (previous id, current unit) of the same alliance and type, closest first
+	local pairs_ = {}
+	for ci, c in ipairs(current) do
+		for id, t in pairs(B.track) do
+			if t.a == c.a and t.type == c.type then
+				local d = math.sqrt((t.x - c.x) ^ 2 + (t.y - c.y) ^ 2) + ((t.name == c.name) and 0 or 3)
+				if d <= TRACK_MAX_M then pairs_[#pairs_ + 1] = { d = d, id = id, ci = ci } end
+			end
+		end
+	end
+	table.sort(pairs_, function(p1, p2) return p1.d < p2.d end)
+	local taken_id, assigned = {}, {}
+	for _, pr in ipairs(pairs_) do
+		if not taken_id[pr.id] and not assigned[pr.ci] then
+			taken_id[pr.id], assigned[pr.ci] = true, pr.id
+		end
+	end
+	local track = {}
+	for ci, c in ipairs(current) do
+		local id = assigned[ci]
+		if not id then
+			B.next_n[c.a] = (B.next_n[c.a] or 0) + 1
+			id = c.a * 10000 + B.next_n[c.a]
+		end
+		units[id] = { unit = c.unit, army = c.army, alliance = c.a, army_index = c.r }
+		track[id] = { a = c.a, type = c.type, name = c.name, x = c.x, y = c.y }
+	end
+	B.units, B.track = units, track
 end
 
 local function sorted_ids()
@@ -559,7 +584,7 @@ local function start()
 	B.id = os.date("%Y%m%d-%H%M%S")
 	B.stream = RUN .. "/battle-" .. B.id .. ".jsonl"
 	B.tick, B.seq, B.controlled, B.phase, B.said = 0, nil, {}, "deployment", nil
-	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n = nil, nil, false, {}, {}, {}
+	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n, B.track = nil, nil, false, {}, {}, {}, {}
 	scan()
 	for id in pairs(B.units) do B.static_sent[id] = true end
 

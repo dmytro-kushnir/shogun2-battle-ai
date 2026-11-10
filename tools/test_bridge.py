@@ -37,7 +37,13 @@ local function make_unit(name, x, z)
     MOCK_UNITS[#MOCK_UNITS + 1] = u
     return setmetatable(u, { __index = {
         position = function(s) return s.pos end, bearing = function() return 90 end,
-        name = function(s) return s.name_ end, type = function(s) return "type_" .. s.name_ end,
+        -- like custom/campaign battles (run 24): a unit's name is its PLACE in the army ("1", "2", ...), so it
+        -- changes when a unit before it dies; the type stays (unique per mock unit, used by the test)
+        name = function(s)
+            for i, x in ipairs(MOCK_ARMY_UNITS[s.prefix] or {}) do if x == s then return tostring(i) end end
+            return "?"
+        end,
+        type = function(s) return "type_" .. s.name_ end,
         number_of_men_alive = function() return 100 end, initial_number_of_men = function() return 120 end,
         is_routing = function() return false end, is_shattered = function() return false end,
         is_moving = function(s) return s.dest ~= nil or s.target ~= nil end, is_moving_fast = function() return false end,
@@ -52,7 +58,7 @@ end
 MOCK_ARMY_UNITS, MOCK_RELEASES, MOCK_OVER, MOCK_LATE_RELEASES = {}, 0, false, 0
 local function make_army(prefix, n, x0, handicap)
     local units = {}
-    for i = 1, n do units[i] = make_unit(prefix .. i, x0, i * 30) end
+    for i = 1, n do units[i] = make_unit(prefix .. i, x0, i * 30); units[i].prefix = prefix end
     MOCK_ARMY_UNITS[prefix] = units
     return obj({
         units = function() return list(units) end,
@@ -157,7 +163,7 @@ end
 -- like the engine: a destroyed unit is removed and the list closes the gap (positions of later units shift)
 function MOCK_KILL(prefix, index) table.remove(MOCK_ARMY_UNITS[prefix], index) end
 -- a reinforcement joins an army mid-battle
-function MOCK_REINFORCE(prefix, name, x, z) table.insert(MOCK_ARMY_UNITS[prefix], make_unit(name, x, z)) end
+function MOCK_REINFORCE(prefix, name, x, z) local u = make_unit(name, x, z); u.prefix = prefix; table.insert(MOCK_ARMY_UNITS[prefix], u) end
 
 events = { BattleDeploymentPhaseCommenced = {}, BattleConflictPhaseCommenced = {}, BattleCompleted = {},
            BattleUnitRouts = {}, BattleCommandingUnitRouts = {}, BattleUnitAttacksEnemyUnit = {} }
@@ -197,8 +203,11 @@ def main() -> bool:
             for step in range(1, 81):  # 40 s
                 if step == 4:
                     g.MOCK_FIRE("BattleConflictPhaseCommenced")
+                if step == 29:  # ids before the loss, by (unique) mock type
+                    st = link.battle.static
+                    ids_before = {st[u["id"]]["type"]: u["id"] for u in link.battle.state["units"]}
                 if step == 30:
-                    g.MOCK_KILL("ai", 1)  # ai1 destroyed: ai2 and ai3 move up in the list
+                    g.MOCK_KILL("ai", 1)  # ai1 destroyed: ai2 and ai3 move up in the list (and get renamed)
                 if step == 35:
                     g.MOCK_REINFORCE("player", "player3", -320, 200)
                 if step == 40:
@@ -219,15 +228,20 @@ def main() -> bool:
                     if decision:
                         link.send(*decision)
             # ids must still mean the same units after the list was compacted: compare final positions by name
-            by_name = {u.name_: u for u in g.MOCK_UNITS.values()}
+            by_type = {"type_" + u.name_: u for u in g.MOCK_UNITS.values()}  # the mock type is unique per unit
             static = link.battle.static
             for su in link.battle.state["units"]:
-                mock = by_name.get(static.get(su["id"], {}).get("name"))
+                mock = by_type.get(static.get(su["id"], {}).get("type"))
                 if mock is None:
                     problems.append(f"unit id {su['id']} has no static info (reinforcement not announced?)")
                 elif abs(mock.pos.x - su["x"]) > 0.01 or abs(mock.pos.z - su["y"]) > 0.01:
                     problems.append(f"unit id {su['id']} ({mock.name_}) points at another unit")
-            if "player3" not in {u.get("name") for u in static.values()}:
+            # ...and every surviving unit must have KEPT its id (run 24: renaming gave units new ids mid-battle)
+            ids_after = {static[u["id"]]["type"]: u["id"] for u in link.battle.state["units"]}
+            changed = {t: (ids_before[t], i) for t, i in ids_after.items() if t in ids_before and ids_before[t] != i}
+            if changed:
+                problems.append(f"unit ids changed after a loss: {changed}")
+            if "type_player3" not in {u.get("type") for u in static.values()}:
                 problems.append("the reinforcement player3 never got static info")
 
             # sieges: the building list arrives, and a garrison order reaches the engine
