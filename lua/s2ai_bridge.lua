@@ -248,10 +248,10 @@ local HANDLERS = {
 	formation = function(uc, o) uc:change_formation(o.formation) end,
 	ability = function(uc, o) uc:perform_special_ability(o.ability) end,
 	-- sieges (argument conventions as in the game's own battle scripts)
-	-- siege orders touch a building handle: each runs in a throwaway coroutine (see read_building)
-	garrison = function(uc, o) B.isolated(function() uc:defend_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end) end,
-	climb = function(uc, o) B.isolated(function() uc:climb_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end) end,
-	attack_building = function(uc, o) B.isolated(function() uc:attack_building(B.building_handle(o.building) or error("no building " .. tostring(o.building))) end) end,
+	-- sieges: the building is fetched fresh from the garrisonable list (its id is the index there)
+	garrison = function(uc, o) uc:defend_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end,
+	climb = function(uc, o) uc:climb_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
+	attack_building = function(uc, o) uc:attack_building(B.building_handle(o.building) or error("no building " .. tostring(o.building))) end,
 	occupy = function(uc, o) uc:occupy_zone(vec(o.x, o.y), o.run ~= false) end,
 	leave_building = function(uc) uc:leave_building() end,
 	shot_type = function(uc, o) uc:change_shot_type(o.shot) end,
@@ -437,115 +437,65 @@ local function looks_like_building(b)
 		and type(rawget(mt, "is_garrisoned")) == "function"
 end
 
--- Run 18 (two castle maps): even read-and-drop at load hit an item (#20 of 501, #67 of 627) whose name came
--- back as a FUNCTION, and afterwards alliances:count() in the same thread was no number either: values shifted
--- by one, the signature of an engine binding that leaves the Lua stack unbalanced. Every Lua coroutine has its
--- own stack, so each building is read in a throwaway coroutine: whatever a broken binding does to that stack
--- dies with it, and the battle script's thread (timer, orders) stays clean. Items whose values come back with
--- wrong types are dropped.
-local function read_building(list, i)
-	local b = call(list, "item", i)
-	if not looks_like_building(b) then return "skip" end
+-- Run 19 (diagnostic): from inside a coroutine the engine's calls return garbage (alliances():count() and
+-- building names came back as functions): the bindings push their results onto the battle script's MAIN
+-- thread, not the caller's. So no coroutines - and everything stays in the main thread.
+-- Runs 17/18: reading the full list broke right where the castle pieces end and the scenery begins (items 24,
+-- 20, 67 on three maps); the castle pieces themselves always read fine. The list also offers
+-- garrisonable_count() / garrisonable_item(i): only buildings that can hold troops - walls, towers, gates -
+-- exactly what a siege needs, and no scenery. Step 3 reads only that list, calling the methods in the order of
+-- the discovery run that worked, and stops at the first wrongly typed value. A building's id is its index in
+-- the garrisonable list. (The keep holds no troops, so it is not in the list.)
+local function read_garrisonable(list, i)
+	local b = call(list, "garrisonable_item", i)
+	if not looks_like_building(b) then return nil, "not a building" end
+	-- discovery-run order: alliance_owner_id, capacity, currently_garrisoned, health, is_garrisoned, name, position
+	local owner_id = call(b, "alliance_owner_id")
+	local cap = call(b, "capacity")
+	local gar = call(b, "currently_garrisoned")
+	local hp = call(b, "health")
 	local name = call(b, "name")
-	if type(name) ~= "string" then return "bad" end
 	local p = call(b, "position")
-	local x, y, z = p and call(p, "get_x"), p and call(p, "get_z"), p and call(p, "get_y")
-	local cap, owner_id, hp = call(b, "capacity"), call(b, "alliance_owner_id"), call(b, "health")
-	-- anything of the wrong type means this coroutine's stack is off: throw the whole item away
-	for _, v in ipairs({ x, y, z, cap, owner_id, hp }) do
-		if v ~= nil and type(v) ~= "number" then return "bad" end
+	local x, z_, y = p and call(p, "get_x"), p and call(p, "get_y"), p and call(p, "get_z")
+	if type(name) ~= "string" then return nil, "name is a " .. type(name) end
+	for _, v in ipairs({ owner_id, cap, hp, x, y, z_ }) do
+		if v ~= nil and type(v) ~= "number" then return nil, "a value is a " .. type(v) end
 	end
-	return { name = name, x = x, y = y, z = z, cap = cap, owner = (owner_id and owner_id >= 0) and (owner_id + 1) or 0,
-		hp = hp }
-end
-
--- Run 19: the coroutine scan saw "0 listed": engine calls seemed to return nothing inside a coroutine. This
--- diagnostic logs, without any risky call, what works where: the list and its count in the main thread (they
--- always did), one known-safe call in a coroutine, and the first items' handles/names in a coroutine.
-local function coroutine_diagnostic(list)
-	local function in_co(fn)
-		local ok, a, b = coroutine.resume(coroutine.create(fn))
-		return ok and string.format("%s/%s", type(a), type(b)) or ("error: " .. tostring(a))
-	end
-	local parts = {
-		"alliances():count() in a coroutine -> " .. in_co(function()
-			local al = call(B.battle, "alliances")
-			return al, al and call(al, "count")
-		end),
-		"buildings() in a coroutine -> " .. in_co(function()
-			return call(B.battle, "buildings")
-		end),
-	}
-	for i = 1, 3 do
-		parts[#parts + 1] = string.format("item(%d)+name in a coroutine with the main thread's list -> %s", i,
-			in_co(function()
-				local b = call(list, "item", i)
-				return b, b and call(b, "name")
-			end))
-	end
-	log("coroutine diagnostic: " .. table.concat(parts, "; "))
+	return { name = name, x = x, y = y, z = z_, cap = cap, hp = hp, gar = gar == true,
+		owner = (owner_id and owner_id >= 0) and (owner_id + 1) or 0 }
 end
 
 function scan_buildings() -- assigns the local declared at the top
 	B.forts = {}
-	-- the list and its count in the main thread: these two calls never caused trouble (runs 13-18)
 	local list = call(B.battle, "buildings")
-	local n = list and num(call(list, "count")) or 0
-	log(string.format("buildings: main thread sees %s list, count %s", type(list), tostring(n)))
-	if list then pcall(coroutine_diagnostic, list) end
-	if true then return {} end -- diagnostic run: read nothing else
-	do -- (kept for the next step)
-		local co = coroutine.create(function()
-			local l = call(B.battle, "buildings")
-			return l and num(call(l, "count")) or 0
-		end)
-		local ok, v = coroutine.resume(co)
-		n = (ok and num(v)) or 0
-	end
-	local out, skipped, bad = {}, 0, 0
+	local total = list and num(call(list, "count")) or 0
+	local n = list and num(call(list, "garrisonable_count")) or 0
+	local out, why = {}, nil
 	for i = 1, math.min(n, SCAN_LIMIT) do
-		local co = coroutine.create(function()
-			return read_building(call(B.battle, "buildings"), i)
-		end)
-		local ok, r = coroutine.resume(co)
-		co = nil
-		if not ok or r == "bad" then
-			bad = bad + 1
-		elseif r == "skip" then
-			skipped = skipped + 1
-		elseif type(r) == "table" then
-			local mil = is_military(r.name, r.cap, r.owner - 1)
-			if mil then B.forts[#B.forts + 1] = i end
-			out[#out + 1] = { id = i, name = r.name, x = r.x, y = r.y, z = r.z, cap = r.cap, owner = r.owner,
-				hp = r.hp, mil = mil }
-		end
+		local r, err = read_garrisonable(list, i)
+		if not r then why = string.format("item %d: %s - scan stopped", i, err); break end
+		B.forts[#B.forts + 1] = i
+		out[#out + 1] = { id = i, name = r.name, x = r.x, y = r.y, z = r.z, cap = r.cap, owner = r.owner, hp = r.hp,
+			gar = r.gar, mil = true }
 	end
-	-- the main thread must still be healthy: this is the check that FAILED in runs 17 and 18
 	local check = num(call(call(B.battle, "alliances"), "count"))
-	log(string.format("buildings: %d listed, %d read (limit %d), %d fortifications, %d skipped, %d bad (isolated); "
-		.. "engine check in the main thread: %s", n, #out, SCAN_LIMIT, #B.forts, skipped, bad,
-		check and ("ok, " .. check .. " alliances") or "FAILED"))
+	log(string.format("buildings: %d on the map, %d garrisonable, %d read%s; engine check: %s", total, n, #out,
+		why and (" (" .. why .. ")") or "", check and ("ok, " .. check .. " alliances") or "FAILED"))
 	return out
 end
 
--- Step 1: no periodic building updates (they would touch handles every few seconds); comes in a later step.
+-- no periodic building updates yet (a later step, once the static read is proven)
 function building_states() -- assigns the local declared at the top
 	return nil
 end
 
--- a fresh handle for a siege order, used at once and dropped
+-- a fresh garrisonable building for a siege order, used at once and dropped
 local function building_handle(i)
 	local list = call(B.battle, "buildings")
-	local b = list and call(list, "item", i) or nil
+	local b = list and call(list, "garrisonable_item", i) or nil
 	return looks_like_building(b) and b or nil
 end
 B.building_handle = building_handle
-
--- run fn in a throwaway coroutine; raise its error (if any) in the caller, so the order shows up as failed
-function B.isolated(fn)
-	local ok, err = coroutine.resume(coroutine.create(fn))
-	if not ok then error(err, 0) end
-end
 
 -- ------------------------------------------------------------------ start
 

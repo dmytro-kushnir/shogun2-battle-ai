@@ -123,9 +123,18 @@ getmetatable(foreign).__index = function(_, k)
 end
 -- and one building whose name comes back as a function (run 18: the engine returned shifted values)
 local broken = make_building(function() end, 0, 0, 0, -1)
-local buildings = list({ make_building("castle_02_gate_02", 80, 40, 168, 1),
-    make_building("castle_02_wall_10_01", 80, 20, 20, 1), foreign, broken,
-    make_building("village_house_01", -500, 300, 0, -1) })
+local gate, wall = make_building("castle_02_gate_02", 80, 40, 168, 1), make_building("castle_02_wall_10_01", 80, 20, 20, 1)
+local all_items = { gate, wall, foreign, broken, make_building("village_house_01", -500, 300, 0, -1) }
+local garrisonable = { gate, wall }  -- only buildings that can hold troops
+local buildings = obj({
+    count = function() return #all_items end,
+    item = function(_, i)
+        MOCK_FULL_LIST_USED = true  -- reading the full list (scenery) broke the game in runs 17/18
+        return all_items[i]
+    end,
+    garrisonable_count = function() return #garrisonable end,
+    garrisonable_item = function(_, i) return garrisonable[i] end,
+})
 
 MOCK_TIMERS = {}
 empire_battle = {}
@@ -217,13 +226,10 @@ def main() -> bool:
             gate = next((b for b in blds.values() if "gate" in b["name"]), None)
             if gate is None or not gate["mil"] or gate["owner"] != 2:
                 problems.append(f"fortifications not streamed as expected: {list(blds.values())[:2]}")
-            house = next((b for b in blds.values() if "house" in b["name"]), None)
-            if house is None or house["mil"]:
-                problems.append("a village house was not recognised as scenery")
-            if g.MOCK_FOREIGN_TOUCHED:
-                problems.append("the bridge called methods on a buildings() item that is not a battle.building")
-            if len(blds) != 3:
-                problems.append(f"expected 3 buildings read (the foreign item skipped), got {len(blds)}")
+            if g.MOCK_FOREIGN_TOUCHED or g.MOCK_FULL_LIST_USED:
+                problems.append("the bridge walked the full building list (scenery broke the game in runs 17/18)")
+            if sorted(b["name"] for b in blds.values()) != ["castle_02_gate_02", "castle_02_wall_10_01"]:
+                problems.append(f"expected the 2 garrisonable buildings, got {[b['name'] for b in blds.values()]}")
             if gate is not None:
                 ai_id = next(u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2)
                 link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
