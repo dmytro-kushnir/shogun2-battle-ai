@@ -197,6 +197,23 @@ def test_ship_shot_types():
                                                          if k in ("cmd", "unit", "target")}
 
 
+def test_gameai_opponent():
+    from types import SimpleNamespace
+    from s2ai.server import GameAIOpponent, NoCommander
+    static = {i: {"id": i, "alliance": a, "type": "Inf_Spear_Yari_Ashigaru", "men0": 100}
+              for i, a in ((10001, 1), (10002, 1), (20001, 2), (20002, 2))}
+    pos = {10001: (0, 0), 10002: (40, 0), 20001: (500, 300), 20002: (60, 200)}
+    state = {"t": 30.0, "tick": 60, "units": [{"id": i, "x": x, "y": y, "men": 100} for i, (x, y) in pos.items()]}
+    battle = SimpleNamespace(static=static, state=state, phase="conflict")
+    opp = GameAIOpponent(2)   # we command alliance 2: the game's AI gets alliance 1
+    assert opp.decide(battle) == [{"cmd": "ai_attack", "alliance": 1, "target": 20002}]
+    assert opp.decide(battle) == []                  # not again before RETARGET_S
+    battle.phase, state["t"] = "deployment", 2.0
+    assert GameAIOpponent(2).decide(battle) == []    # nothing while deploying
+    nc = NoCommander(2)
+    assert nc.decide(battle) == ([], []) and nc.decide(battle) is None  # releases everything once
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

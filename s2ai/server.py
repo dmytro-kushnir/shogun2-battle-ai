@@ -18,11 +18,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import logging
 import queue
+import subprocess
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 from . import report
 from .executor import Executor
@@ -80,6 +83,51 @@ class DemoCommander:
         orders = [{"cmd": "attack", "unit": u.id, "target": min(enemies, key=lambda e: report.dist(u, e)).id,
                    "run": True} for u in ours]
         return [u.id for u in ours], orders
+
+
+class NoCommander:
+    """Controls nothing: the AI side keeps the game's own battle AI (the baseline in research runs)."""
+
+    def __init__(self, ai_alliance: int):
+        self.ai = ai_alliance
+        self.sent = False
+
+    def decide(self, battle) -> tuple[list[int], list[dict]] | None:
+        if self.sent:
+            return None
+        self.sent = True
+        return [], []
+
+
+class GameAIOpponent:
+    """Research runs: the human's side is handed to the game's AI planner (the one the historical battles script),
+    so every condition fights the same opponent. Every RETARGET_S it is told to attack the commanded side's unit
+    nearest to its own centre; the game's AI does the rest (formations, flanks, missiles)."""
+
+    RETARGET_S = 10.0
+
+    def __init__(self, ai_alliance: int):
+        self.ai = ai_alliance      # the side we command (the opponent is every other alliance)
+        self.next_at = 0.0
+
+    def decide(self, battle) -> list[dict]:
+        state = battle.state
+        if state is None or state["t"] < self.next_at or not conflict(battle):
+            return []
+        self.next_at = state["t"] + self.RETARGET_S
+        units = report.merge(battle.static, state)
+        if any(u.kind == "ship" for u in units):
+            return []  # no planner at sea (not probed yet)
+        orders = []
+        for al in sorted({u.alliance for u in units if u.alliance != self.ai}):
+            own = [u for u in units if u.alliance == al and u.fighting_fit]
+            targets = [u for u in units if u.alliance == self.ai and u.fighting_fit]
+            if not own or not targets:
+                continue
+            cx, cy = sum(u.x for u in own) / len(own), sum(u.y for u in own) / len(own)
+            t = min(targets, key=lambda e: math.hypot(e.x - cx, e.y - cy))
+            orders.append({"cmd": "ai_attack", "alliance": al, "target": t.id})
+        return orders
 
 
 class GeneralCommander:
@@ -232,7 +280,13 @@ class GeneralCommander:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--commander", choices=["general", "demo"], default="general")
+    ap.add_argument("--commander", choices=["general", "demo", "none"], default="general",
+                    help="none: the AI side keeps the game's own battle AI (research baseline)")
+    ap.add_argument("--opponent", choices=["human", "gameai"], default="human",
+                    help="gameai: the human's side is handed to the game's AI planner (research runs; watch, "
+                         "do not command)")
+    ap.add_argument("--condition", default="",
+                    help="a label for this run's experimental condition, saved with every battle (research runs)")
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--conversation-plans", type=int, default=6,
@@ -274,6 +328,7 @@ def main() -> None:
     abl = unit_abilities()
     link = GameLink()
     commander = None
+    opponent = None
     battle_id = None
     take: list[int] = []
     last_write = 0.0
@@ -309,16 +364,23 @@ def main() -> None:
                 if general is not None:
                     general.close()  # a fresh conversation per battle
                     commander = GeneralCommander(ai, general, b.id, board, link, args.min_plan_s, args.far_plan_s)
+                elif args.commander == "none":
+                    commander = NoCommander(ai)
                 else:
                     commander = DemoCommander(ai)
+                opponent = GameAIOpponent(ai) if args.opponent == "gameai" else None
                 armies = ", ".join(f"a{a['alliance']}/{a['army']}: {a['units']} units hcp {a['handicap']}"
                                    for a in msg["armies"])
                 log.info("battle %s: %d units [%s]; commanding alliance %d", b.id, len(msg["units"]), armies, ai)
-                desc = general.describe() if general else "demo commander"
+                desc = general.describe() if general else f"{args.commander} commander"
                 board.update(battle=b.id, ai=ai, plan=None, plans=0, orders=[], general=desc, ab_used=[],
                              timings=ability_timings())
                 # for the history view: which side we commanded, and with what
-                (link.runtime / f"meta-{b.id}.json").write_text(json.dumps({"ai": ai, "general": desc}))
+                (link.runtime / f"meta-{b.id}.json").write_text(json.dumps({
+                    "ai": ai, "general": desc, "commander": args.commander, "opponent": args.opponent,
+                    "condition": args.condition, "commit": git_commit(),
+                    "settings": {k: getattr(args, k) for k in ("model", "effort", "conversation_plans",
+                                                                "min_plan_s", "far_plan_s")}}))
                 board.note(f"battle {b.id} started, commanding alliance {ai}")
             elif kind == "event" and msg.get("name") != "BattleUnitAttacksEnemyUnit":  # too chatty to log
                 log.info("event %s%s", msg.get("name"), f" -> phase {msg['phase']}" if "phase" in msg else "")
@@ -339,6 +401,14 @@ def main() -> None:
                 except Exception:  # noqa: BLE001 - a bad plan or state must not stop the server mid-battle
                     log.exception("commander failed on tick %s", last_tick)
                     decision = None
+                if opponent is not None:
+                    try:
+                        extra = opponent.decide(b)
+                    except Exception:  # noqa: BLE001
+                        log.exception("opponent failed on tick %s", last_tick)
+                        extra = []
+                    if extra:
+                        decision = (decision[0], decision[1] + extra) if decision is not None else (take, extra)
                 now = time.monotonic()
                 try:
                     if decision is not None and (decision[1] or decision[0] != take):
@@ -366,6 +436,18 @@ def main() -> None:
                 if last_tick % 10 == 0:  # every 5 s: the learned ground heights
                     board.update(terrain=b.terrain.cells())
         time.sleep(POLL_S)
+
+
+def git_commit() -> str:
+    """The code version a battle ran with (research runs must name it); "" outside a git checkout."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5,
+                             cwd=Path(__file__).resolve().parents[1])
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True,
+                               text=True, timeout=5, cwd=Path(__file__).resolve().parents[1])
+        return out.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "") if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def map_buildings(buildings: dict | None, ai: int) -> list[dict]:

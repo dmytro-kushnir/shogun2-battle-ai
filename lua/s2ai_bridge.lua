@@ -435,6 +435,53 @@ local SHIP_HANDLERS = {
 	halt = function(uc) uc:halt() end,
 }
 
+-- The game's own tactical AI for a whole alliance, as the historical battles script it
+-- (Alliance:create_ai_unit_planner(), add_units, attack_unit / defend_position). For research runs the human's
+-- side is handed to it, so the general fights a fixed opponent instead of a person. Orders carry `alliance`
+-- instead of `unit`. The planner is created once per battle with every unit of the alliance and kept alive
+-- like the controllers (GRAVEYARD). The first outcome of each call is logged.
+local function ai_log_once(what, msg)
+	B.ai_logged = B.ai_logged or {}
+	if not B.ai_logged[what] then
+		B.ai_logged[what] = true
+		log("ai planner " .. what .. ": " .. msg)
+	end
+end
+
+local function ai_planner(a)
+	B.planners = B.planners or {}
+	if B.planners[a] then return B.planners[a] end
+	if B.naval then error("no ai planner in naval battles") end
+	local alliance = B.battle:alliances():item(a)
+	local p = alliance:create_ai_unit_planner()
+	bury(p)
+	local n = 0
+	local armies = alliance:armies()
+	for r = 1, armies:count() do
+		local list = armies:item(r):units()
+		for u = 1, list:count() do
+			p:add_units(list:item(u))
+			n = n + 1
+		end
+	end
+	B.planners[a] = p
+	log("ai planner: alliance " .. a .. " handed to the game's AI, " .. n .. " units; methods: " .. method_names(p))
+	return p
+end
+
+local AI_HANDLERS = {
+	ai_attack = function(o)
+		local target = B.units[o.target]
+		if not target then error("no target unit " .. tostring(o.target)) end
+		ai_planner(o.alliance):attack_unit(target.unit)
+		ai_log_once("attack", "attack_unit ok")
+	end,
+	ai_defend = function(o)
+		ai_planner(o.alliance):defend_position(vec(o.x, o.y), o.radius or 100)
+		ai_log_once("defend", "defend_position ok")
+	end,
+}
+
 -- The orders file is a Lua table literal written by the server. It runs in an empty environment, as source
 -- text only (precompiled bytecode can escape a setfenv sandbox, so it is refused) and with an instruction budget
 -- (so a broken file cannot hang the battle).
@@ -507,7 +554,14 @@ local function apply_orders()
 		local handler = B.naval and SHIP_HANDLERS[o.cmd] or (not B.naval and HANDLERS[o.cmd]) or nil
 		local uc = B.controlled[o.unit]
 		local err
-		if not handler then err = "unknown cmd"
+		if o.alliance ~= nil then
+			-- an order for a whole alliance's game AI (no unit controller involved)
+			if not AI_HANDLERS[o.cmd] then err = "unknown cmd"
+			else
+				local ok, e = pcall(AI_HANDLERS[o.cmd], o)
+				if not ok then err = tostring(e) end
+			end
+		elseif not handler then err = "unknown cmd"
 		elseif not uc then err = "unit not controlled"
 		else
 			local ok, e = pcall(handler, uc, o)

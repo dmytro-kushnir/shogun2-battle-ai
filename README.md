@@ -77,6 +77,10 @@ side; it guesses from the armies' difficulty handicap), `--commander demo` (no m
 nearest enemy), `--lan` (let other devices on your network open the map; read-only and without a password, so only
 on a network you trust), `--port 8765` (the map's port), `--no-browser` (do not open the map at start).
 
+Research runs (see [`research/`](research/README.md)): `--opponent gameai` hands your side to the game's own AI
+so the general fights a fixed opponent (start the battle and watch), `--commander none` leaves the AI side to the
+game's battle AI (the baseline), `--condition L1-sengoku` labels the run in the summaries.
+
 Fewer tokens: `--model haiku` (cheapest, weaker), `--far-plan-s 20` (plan at most every 20 s while the armies are
 over 300 m apart; default 15), `--min-plan-s 8` (never plan more often than that), `--conversation-plans 4` (start
 a fresh, shorter conversation sooner; default 6).

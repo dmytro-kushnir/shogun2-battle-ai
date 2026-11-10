@@ -89,6 +89,8 @@ def summarize(bid: str, runtime: Path = RUNTIME, extra: dict | None = None) -> d
     orders = _jsonl(runtime / f"orders-{bid}.jsonl")
     out = {
         "battle": bid, "general": meta.get("general", ""), "ai_alliance": ai,
+        "commander": meta.get("commander", ""), "opponent": meta.get("opponent", "human"),
+        "condition": meta.get("condition", ""), "commit": meta.get("commit", ""),
         "duration_s": round(last.get("t", 0)), "ended": ended, "result": result,
         "ai": a, "player": p,
         "loss_ratio": round(p["casualties"] / a["casualties"], 2) if a["casualties"] else None,
@@ -105,7 +107,8 @@ def summarize(bid: str, runtime: Path = RUNTIME, extra: dict | None = None) -> d
     return out
 
 
-COLUMNS = [("battle", "battle"), ("general", "general"), ("result", "result"), ("duration_s", "time s"),
+COLUMNS = [("battle", "battle"), ("general", "general"), ("opponent", "opponent"), ("condition", "condition"),
+           ("result", "result"), ("duration_s", "time s"),
            ("ai.units", "AI units"), ("ai.men_start", "AI men"), ("ai.fighting_share", "AI left"),
            ("player.units", "pl units"), ("player.men_start", "pl men"), ("player.fighting_share", "pl left"),
            ("loss_ratio", "kill ratio"), ("plans", "plans"), ("plan_failures", "fails"),

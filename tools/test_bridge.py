@@ -92,9 +92,24 @@ local function make_army(prefix, n, x0, handicap)
 end
 
 local player_army, ai_army = make_army("player", 2, -300, -2), make_army("ai", 3, 300, 2)
+-- the game's AI planner for a whole alliance (historical battles: Alliance:create_ai_unit_planner())
+local function make_planner(name)
+    MOCK_PLANNERS = (MOCK_PLANNERS or 0) + 1
+    local mine = {}
+    return obj({
+        add_units = function(_, u) mine[#mine + 1] = u end,
+        attack_unit = function(_, t)
+            MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " (" .. #mine .. " units)->" .. t.name_
+            for _, u in ipairs(mine) do u.target = t end
+        end,
+        defend_position = function() end,
+    })
+end
 local alliances = list({
-    obj({ armies = function() return list({ player_army }) end }),
-    obj({ armies = function() return list({ ai_army }) end }),
+    obj({ armies = function() return list({ player_army }) end,
+          create_ai_unit_planner = function() return make_planner("a1") end }),
+    obj({ armies = function() return list({ ai_army }) end,
+          create_ai_unit_planner = function() return make_planner("a2") end }),
 })
 
 -- buildings as battle:buildings() lists them: all share the registered battle.building class (like the engine's
@@ -409,6 +424,13 @@ def main() -> bool:
                 link.poll()
                 if not any(c.startswith("garrison") for c in g.MOCK_CALLS.values()):
                     problems.append(f"garrison order did not reach the engine: {link.battle.applied[-1:]}")
+                # research runs: the human's side (alliance 1) handed to the game's AI planner
+                link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
+                          [{"cmd": "ai_attack", "alliance": 1, "target": ai_id}])
+                tick()
+                link.poll()
+                if not any(c.startswith("planner a1 (3 units)") for c in g.MOCK_CALLS.values()):
+                    problems.append(f"ai planner order did not reach the engine: {link.battle.applied[-1:]}")
 
             g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")
