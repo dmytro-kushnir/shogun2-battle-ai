@@ -6,6 +6,7 @@ The general always plans with these. One point per line; edit freely, the file i
 - Unit sizes, missile ranges and ammunition in the report come from the game itself; trust them over general knowledge.
 - Morale wins battles: units rout when they lose heart, not only when they lose men. Attacks into a unit's flank or rear, being outnumbered, heavy losses, fatigue and losing the general all lower morale.
 - The general's unit inspires every unit near it. If the general dies or routs, the whole army loses a lot of morale. Never throw the general into the front line early; keep him close behind the fighting, out of missile range when possible.
+- The report tags units whose morale is at risk ("morale risk MEDIUM/HIGH" with the reasons), yours and the enemy's. It is an estimate from what can be seen. Act on it: support or pull back your wavering units before they break (a routing unit spreads panic to its neighbours), and strike the enemy's shaky units, ideally in the flank or rear, to start a chain of routs.
 - A routing unit is out of your control until it rallies by itself. A shattered unit will not come back. Do not give them orders.
 - Spear infantry (yari, naginata, pikes) defeats cavalry that charges its front; cavalry should not charge spears head-on.
 - Cavalry is fast and hits hard on the charge, especially into the flank or rear of infantry that is already fighting, and against missile units. In a long frontal melee it loses.

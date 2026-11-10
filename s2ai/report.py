@@ -179,7 +179,7 @@ def state_word(u: U, nearest_enemy_m: float | None) -> str:
     return "standing"
 
 
-def unit_line(u: U, enemies: list[U], show_nearest: bool) -> str:
+def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> str:
     near = min(enemies, key=lambda e: dist(u, e)) if enemies else None
     d = dist(u, near) if near else None
     kind = u.kind + (" missile" if u.missile else "") + (" GENERAL" if u.general else "")
@@ -191,12 +191,16 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool) -> str:
             f"alt {u.z:4.0f} facing {u.h:3.0f} {state_word(u, d)}{' GARRISONED' if u.garrisoned else ''}{ammo}")
     if show_nearest and near is not None:
         line += f" | nearest enemy {near.id} {d:.0f}m {compass(bearing(u.x, u.y, near.x, near.y))}"
-    return line
+    return line + extra
 
 
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
-          plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None) -> tuple[str, list[U]]:
+          plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None,
+          morale=None) -> tuple[str, list[U]]:
     units = merge(static, state)
+    from .morale import tag  # morale.py builds on this module
+    risk = morale.assess(units) if morale is not None else {}
+    mtag = lambda u: tag(risk, u.id)
     ours = [u for u in units if u.alliance == ai and u.alive]
     theirs = [u for u in units if u.alliance != ai and u.alive]
     fit_theirs = [e for e in theirs if e.fighting_fit]
@@ -217,11 +221,15 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append("")
     out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
-        out.append(unit_line(u, fit_theirs, show_nearest=True))
+        out.append(unit_line(u, fit_theirs, show_nearest=True, extra=mtag(u)))
     out.append("")
     out.append("ENEMY UNITS (closest to your army first):")
     for e in sorted(theirs, key=lambda e: math.hypot(e.x - ox, e.y - oy)):
-        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False))
+        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False, extra=mtag(e)))
+    if morale is not None:
+        out.append("")
+        out.append("(morale risk: an estimate from losses, flanks, local numbers, the general and routing friends - "
+                   "the game does not report morale. Units without a tag look steady.)")
     gone = [u for u in units if not u.alive or u.shattered]
     present = {u.id for u in units}
     destroyed = [sid for sid in static if sid not in present]  # no longer on the field at all

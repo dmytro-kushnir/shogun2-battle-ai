@@ -108,7 +108,7 @@ class GeneralCommander:
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
-                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain)
+                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain, battle.morale)
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 

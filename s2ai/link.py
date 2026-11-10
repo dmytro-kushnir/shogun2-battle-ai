@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .morale import MoraleTracker
 from .terrain import HeightMap, fort_points
 
 REPO = Path(__file__).resolve().parent.parent
@@ -52,6 +53,7 @@ class Battle:
     applied: list = field(default_factory=list)
     buildings: dict[int, dict] | None = None  # id -> {name, x, y, z, cap, owner (1-based, 0 none), hp, mil, gar}
     terrain: HeightMap = field(default_factory=HeightMap)  # ground heights learned from unit altitudes
+    morale: MoraleTracker = field(default_factory=MoraleTracker)  # recent losses, for the morale estimate
 
     @property
     def static(self) -> dict[int, dict]:
@@ -124,6 +126,7 @@ class GameLink:
             self.battle.state = msg
             self.battle.phase = msg.get("phase", self.battle.phase)
             self.battle.terrain.add_state(msg)
+            self.battle.morale.add_state(msg)
             for i, hp, owner, gar in msg.get("buildings") or []:  # fortifications' changing state, every 2 s
                 b = (self.battle.buildings or {}).get(i)
                 if b is not None:
