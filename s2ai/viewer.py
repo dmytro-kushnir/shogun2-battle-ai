@@ -108,7 +108,8 @@ def _build_replay(bid: str, path: Path, runtime: Path) -> bytes:
     for u in static:
         t = u.get("type") or "?"
         units[u["id"]] = {"ai": u["alliance"] == ai, "type": t,
-                          "kind": "art" if u.get("art") else "cav" if u.get("cav") else "inf",
+                          "kind": "ship" if u.get("ship") else "art" if u.get("art") else "cav" if u.get("cav")
+                          else "inf",
                           "missile": (u.get("range") or 0) > 0 and (u.get("ammo0") or 0) > 0,
                           "gen": bool(GENERAL_RE.search(t)), "men0": u.get("men0"),
                           "abl": abl.get(t) if u["alliance"] == ai else None}

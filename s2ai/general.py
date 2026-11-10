@@ -123,6 +123,9 @@ How to answer:
 - UNIT TYPES (at the start of a conversation) gives each type's stats from the game: compare melee/defence/charge,
   "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
   advance: cavalry covers ~10 m/s, foot ~4 m/s).
+- Naval battles (units of kind "ship"): ships cannot form lines or charge. attack = close with that ship and fight
+  it (the game decides between broadsides and boarding); move = sail to a position; withdraw = leave the battle.
+  Keep ships together so several fire at one enemy, avoid being caught alone, and finish damaged ships first.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

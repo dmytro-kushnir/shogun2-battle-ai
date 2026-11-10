@@ -62,6 +62,7 @@ local function make_army(prefix, n, x0, handicap)
     MOCK_ARMY_UNITS[prefix] = units
     return obj({
         units = function() return list(units) end,
+        ships = function() MOCK_SHIPS_CALLED = true; return list({}) end,  -- a land battle must never ask
         army_handicap = function() return handicap end,
         create_unit_controller = function()
             MOCK_CONTROLLERS = (MOCK_CONTROLLERS or 0) + 1
@@ -185,6 +186,139 @@ end
 """
 
 
+# A naval battle (custom battle, run 26): army:units() is empty, the fleets are army:ships(); ships are commanded
+# through army:create_ship_controller() (as in the game's own naval scripts: add_ships, take_control,
+# goto_location(v, "full sail"), attack_ship(ship)).
+NAVAL = r"""
+local function obj(methods) return setmetatable({}, { __index = methods }) end
+local function list(items)
+    return obj({ count = function() return #items end, item = function(_, i) return items[i] end })
+end
+battle_vector = {}
+function battle_vector:new()
+    local v = { x = 0, y = 0, z = 0 }
+    return setmetatable(v, { __index = {
+        set = function(s, x, y, z) s.x, s.y, s.z = x, y, z end,
+        get_x = function(s) return s.x end, get_y = function(s) return s.y end, get_z = function(s) return s.z end,
+    } })
+end
+SHIPS, SHIP_CALLS, CONTROLLERS = {}, {}, 0
+local SHIP_MT = { __index = {
+    position = function(s) return s.pos end, name = function(s) return s.name_ end,
+    number_of_men_alive = function() return 60 end, hull_damage = function() return 0.1 end,
+    is_routing = function() return false end, is_shattered = function() return false end,
+    is_surrendered = function() return false end,
+} }
+local function make_ship(name, x, z)
+    local s = setmetatable({ pos = battle_vector:new(), name_ = name }, SHIP_MT)
+    s.pos:set(x, 0, z)
+    SHIPS[#SHIPS + 1] = s
+    return s
+end
+local function make_fleet(prefix, n, x0, handicap)
+    local ships = {}
+    for i = 1, n do ships[i] = make_ship(prefix .. i, x0, i * 80) end
+    return obj({
+        units = function() return list({}) end,
+        ships = function() return list(ships) end,
+        army_handicap = function() return handicap end,
+        create_unit_controller = function() error("ships need a ship controller") end,
+        create_ship_controller = function()
+            CONTROLLERS = CONTROLLERS + 1
+            local mine = {}
+            return obj({
+                add_ships = function(_, s) mine[#mine + 1] = s end,
+                take_control = function() end,
+                release_control = function() end,
+                goto_location = function(_, p, speed)
+                    if speed ~= nil and speed ~= "full sail" then error("bad speed " .. tostring(speed)) end
+                    SHIP_CALLS[#SHIP_CALLS + 1] = "goto " .. mine[1].name_ .. " " .. tostring(speed)
+                end,
+                attack_ship = function(_, t)
+                    SHIP_CALLS[#SHIP_CALLS + 1] = "attack_ship " .. mine[1].name_ .. "->" .. t.name_
+                end,
+            })
+        end,
+    })
+end
+local player, ai = make_fleet("player", 2, -400, -2), make_fleet("ai", 3, 400, 2)
+local alliances = list({ obj({ armies = function() return list({ player }) end }),
+                         obj({ armies = function() return list({ ai }) end }) })
+TIMERS = {}
+empire_battle = {}
+function empire_battle:new()
+    return obj({
+        buildings = function() return obj({ count = function() return 0 end, garrisonable_count = function() return 0 end }) end,
+        alliances = function() return alliances end,
+        register_repeating_timer = function(_, name, ms) TIMERS[name] = ms end,
+        game_time = function() return 0 end, show_advisor_message = function() end,
+    })
+end
+events = { BattleDeploymentPhaseCommenced = {}, BattleConflictPhaseCommenced = {}, BattleCompleted = {},
+           BattleUnitRouts = {}, BattleCommandingUnitRouts = {}, BattleUnitAttacksEnemyUnit = {} }
+function FIRE(name) for _, f in ipairs(events[name]) do f({}) end end
+"""
+
+
+def naval() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "runtime").mkdir()
+        rt = lua51.LuaRuntime()
+        g = rt.globals()
+        rt.execute(NAVAL)
+        g.S2AI_ROOT = str(root).replace("\\", "/")
+        g.dofile(str(REPO / "lua" / "s2ai_bridge.lua"))
+        link = GameLink(runtime=root / "runtime")
+        g.FIRE("BattleConflictPhaseCommenced")
+        commander = None
+        for _ in range(10):
+            g.S2AI_Bridge_Tick()
+            for msg in link.poll():
+                if msg["type"] == "battle_start":
+                    if not msg.get("naval") or len(msg["units"]) != 5:
+                        problems.append(f"naval battle not recognised: naval={msg.get('naval')}, "
+                                        f"{len(msg['units'])} ships")
+                    if not all(u.get("ship") for u in msg["units"]):
+                        problems.append("ships not marked as ships")
+                    commander = DemoCommander(guess_ai_alliance(msg))
+                elif msg["type"] == "applied" and msg["errors"]:
+                    problems.append(f"bridge reported errors: {msg['errors']}")
+            if commander and link.battle.state:
+                d = commander.decide(link.battle)
+                if d:
+                    link.send(*d)
+        # a move at the slower pace, then at full sail
+        ai_ids = [u["id"] for u in link.battle.state["units"] if link.battle.static[u["id"]]["alliance"] == 2]
+        link.send(ai_ids, [{"cmd": "move", "unit": ai_ids[0], "x": 0, "y": 100, "run": False},
+                           {"cmd": "move", "unit": ai_ids[1], "x": 0, "y": 200, "run": True}])
+        g.S2AI_Bridge_Tick()
+        for msg in link.poll():
+            if msg["type"] == "applied" and msg["errors"]:
+                problems.append(f"bridge reported errors on moves: {msg['errors']}")
+        calls = list(g.SHIP_CALLS.values())
+        print(f"naval: ship calls {calls[:4]}{' ...' if len(calls) > 4 else ''}")
+        if not any(c.startswith("attack_ship ai") for c in calls):
+            problems.append("no attack_ship reached the AI ships")
+        if any(c.startswith(("attack_ship player", "goto player")) for c in calls):
+            problems.append("player ships were given orders")
+        if not any(c.startswith("goto ai") and c.endswith("full sail") for c in calls) or \
+                not any(c.startswith("goto ai") and c.endswith("nil") for c in calls):
+            problems.append(f"ship moves not sent as expected: {calls}")
+        s = link.battle.state["units"][0]
+        if s.get("hull") != 0.1 or s.get("men") != 60:
+            problems.append(f"ship state incomplete: {s}")
+        log = (root / "runtime" / "bridge.log").read_text()
+        if "ship controller methods: " not in log or "naval battle" not in log:
+            problems.append("the ship API was not logged")
+        if "ERROR" in log:
+            problems.append("bridge.log has errors:\n" + log)
+        if len(g.S2AI_CONTROLLER_GRAVEYARD) < g.CONTROLLERS:
+            problems.append("a ship controller was not kept alive")
+    return problems
+
+
 def main() -> bool:
     problems = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -305,6 +439,8 @@ def main() -> bool:
                 problems.append(f"bridge still holds controllers after the battle: {list(g.S2AI_BRIDGE.controlled)}")
             if not link.battle.ended:
                 problems.append("battle_end not received")
+            if g.MOCK_SHIPS_CALLED:
+                problems.append("a land battle asked for ships")
             log = (real_runtime / "bridge.log").read_text() if (real_runtime / "bridge.log").exists() else ""
             if "ERROR" in log:
                 problems.append("bridge.log has errors:\n" + log)
@@ -333,6 +469,7 @@ def main() -> bool:
                     problems.append(f"orders file accepted: {name}")
             print("hostile orders files: refused / sandboxed as expected" if not any(
                 p.startswith("orders file") for p in problems) else "hostile orders files: PROBLEM")
+    problems += naval()
     for p in problems:
         print("FAIL:", p)
     print("\nALL OK" if not problems else "\nFAILED")

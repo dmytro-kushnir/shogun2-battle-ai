@@ -402,10 +402,12 @@ const CLASSES = [
   ['cav_bow', '/)', 'horse archers'],
   ['cav_gun', '/•', 'mounted guns'],
   ['inf', '■', 'other infantry'],
+  ['ship', '⛵', 'ships'],
 ];
 const CLASS_BY_KEY = Object.fromEntries(CLASSES.map(([k, icon, name]) => [k, {key: k, icon, name}]));
 function classify(u) {
   const t = String(u.type || '');
+  if (u.kind === 'ship') return CLASS_BY_KEY.ship;
   if (u.gen) return CLASS_BY_KEY.general;
   if (u.kind === 'art' || /Art|Cannon|Mortar|Gatling|Artillery|Rocket/i.test(t)) return CLASS_BY_KEY.art;
   const gun = /Matchlock|Rifle|Musket|Gun|Carbine|Pistol|Marines|Line_Inf|Revolver|Shotgun/i.test(t);

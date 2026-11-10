@@ -115,12 +115,13 @@ local function scan()
 		local armies = alliances:item(a):armies()
 		for r = 1, armies:count() do
 			local army = armies:item(r)
-			local list = army:units()
+			-- naval battles: the fleets are army:ships() (army:units() is empty); see start()
+			local list = B.naval and army:ships() or army:units()
 			army_n[a .. "|" .. r] = list:count()
 			for u = 1, list:count() do
 				local unit = list:item(u)
 				local p = call(unit, "position")
-				local c = { unit = unit, army = army, a = a, r = r,
+				local c = { unit = unit, army = army, a = a, r = r, ship = B.naval,
 					type = tostring(call(unit, "type")), name = tostring(call(unit, "name")),
 					x = p and call(p, "get_x") or 0, y = p and call(p, "get_z") or 0 }
 				local key = a .. "|" .. r .. "|" .. c.name .. "|" .. c.type
@@ -165,7 +166,7 @@ local function scan()
 			B.next_n[c.a] = (B.next_n[c.a] or 0) + 1
 			id = c.a * 10000 + B.next_n[c.a]
 		end
-		units[id] = { unit = c.unit, army = c.army, alliance = c.a, army_index = c.r }
+		units[id] = { unit = c.unit, army = c.army, alliance = c.a, army_index = c.r, ship = c.ship }
 		track[id] = { a = c.a, r = c.r, key = c.key, type = c.type, name = c.name, x = c.x, y = c.y }
 	end
 	B.units, B.track, B.army_n = units, track, army_n
@@ -178,7 +179,59 @@ local function sorted_ids()
 	return ids
 end
 
+-- Ships (naval battles). Methods the game's own naval scripts call on a ship: position, name,
+-- number_of_men_alive, hull_damage, is_routing, is_shattered, is_surrendered; the rest is tried and logged.
+local SHIP_W = 60 -- metres a ship takes in a line abreast (the server spaces its lines by this)
+
+local function ship_static(id, e)
+	local s = e.unit
+	return {
+		id = id, alliance = e.alliance, army = e.army_index, ship = true,
+		name = call(s, "name"), type = call(s, "type"),
+		men0 = call(s, "initial_number_of_men") or call(s, "number_of_men_alive"),
+	}
+end
+
+local function ship_state(id, e)
+	local s = e.unit
+	local p = call(s, "position")
+	local surrendered = call(s, "is_surrendered")
+	return {
+		id = id,
+		x = p and call(p, "get_x"), y = p and call(p, "get_z"), z = 0,
+		h = call(s, "bearing"), w = SHIP_W,
+		men = call(s, "number_of_men_alive"),
+		hull = call(s, "hull_damage"),
+		rout = call(s, "is_routing"), shat = call(s, "is_shattered"), surr = surrendered,
+		mov = call(s, "is_moving"),
+		gone = surrendered == true,
+		ctl = B.controlled[id] ~= nil,
+	}
+end
+
+-- the method names an engine object offers (they live on its metatable), for the log
+local function method_names(obj)
+	local names = {}
+	pcall(function()
+		local mt = getmetatable(obj)
+		local seen = {}
+		for _, t in ipairs({ mt, type(mt) == "table" and rawget(mt, "__index") or nil }) do
+			if type(t) == "table" then
+				for k, v in pairs(t) do
+					if type(k) == "string" and type(v) == "function" and not seen[k] and not k:match("^__") then
+						seen[k] = true
+						names[#names + 1] = k
+					end
+				end
+			end
+		end
+	end)
+	table.sort(names)
+	return table.concat(names, " ")
+end
+
 local function static_record(id, e)
+	if e.ship then return ship_static(id, e) end
 	local u = e.unit
 	return {
 		id = id, alliance = e.alliance, army = e.army_index,
@@ -190,6 +243,7 @@ local function static_record(id, e)
 end
 
 local function state_record(id, e)
+	if e.ship then return ship_state(id, e) end
 	local u = e.unit
 	local p = call(u, "position")
 	return {
@@ -226,13 +280,18 @@ local function take(id)
 	local e = B.units[id]
 	if not e then return nil, "no unit " .. tostring(id) end
 	local ok, uc = pcall(function()
-		local c = e.army:create_unit_controller()
+		local c = e.ship and e.army:create_ship_controller() or e.army:create_unit_controller()
 		bury(c) -- alive for the whole session, whatever happens next (see GRAVEYARD)
-		c:add_units(e.unit)
+		if e.ship then c:add_ships(e.unit) else c:add_units(e.unit) end
 		c:take_control()
 		return c
 	end)
 	if not ok then return nil, tostring(uc) end
+	if e.ship and not B.ship_api_logged then
+		B.ship_api_logged = true
+		log("ship methods: " .. method_names(e.unit))
+		log("ship controller methods: " .. method_names(uc))
+	end
 	B.controlled[id] = uc
 	return uc
 end
@@ -244,6 +303,7 @@ local function on_field(id)
 	local e = B.units and B.units[id]
 	if not e or B.over then return false end
 	local men = call(e.unit, "number_of_men_alive")
+	if e.ship then return men ~= nil and men > 0 and not call(e.unit, "is_surrendered") end
 	return men ~= nil and men > 0 and not call(e.unit, "is_leaving_battle")
 end
 
@@ -332,6 +392,44 @@ local HANDLERS = {
 	withdraw = function(uc, o) uc:withdraw(o.run ~= false) end,
 }
 
+-- Ship controllers (the game's naval scripts: goto_location(v, "full sail"), attack_ship(ship), withdraw(true),
+-- fire_at_will(bool)). The first outcome of each kind of call is logged, so a test battle shows what the engine
+-- takes.
+local function ship_log_once(what, msg)
+	B.ship_logged = B.ship_logged or {}
+	if not B.ship_logged[what] then
+		B.ship_logged[what] = true
+		log("ship " .. what .. ": " .. msg)
+	end
+end
+
+local SHIP_HANDLERS = {
+	move = function(uc, o)
+		-- the game's scripts only ever pass "full sail"; a plain goto_location(v) is tried for the slower pace
+		if o.run == true then
+			uc:goto_location(vec(o.x, o.y), "full sail")
+			ship_log_once("move (full sail)", "goto_location(v, \"full sail\") ok")
+		else
+			local ok, err = pcall(function() uc:goto_location(vec(o.x, o.y)) end)
+			if ok then
+				ship_log_once("move", "goto_location(v) ok")
+			else
+				uc:goto_location(vec(o.x, o.y), "full sail")
+				ship_log_once("move", "goto_location(v) refused (" .. tostring(err) .. "), full sail used")
+			end
+		end
+	end,
+	attack = function(uc, o)
+		local target = B.units[o.target]
+		if not target then error("no target ship " .. tostring(o.target)) end
+		uc:attack_ship(target.unit)
+		ship_log_once("attack", "attack_ship ok")
+	end,
+	withdraw = function(uc) uc:withdraw(true) end,
+	fire_at_will = function(uc, o) uc:fire_at_will(o.on ~= false) end,
+	halt = function(uc) uc:halt() end,
+}
+
 -- The orders file is a Lua table literal written by the server. It runs in an empty environment, as source
 -- text only (precompiled bytecode can escape a setfenv sandbox, so it is refused) and with an instruction budget
 -- (so a broken file cannot hang the battle).
@@ -400,7 +498,9 @@ local function apply_orders()
 	end
 	-- then the orders
 	for i, o in ipairs(t.orders or {}) do
-		local handler = HANDLERS[o.cmd]
+		local e = B.units[o.unit]
+		local handler = (e and e.ship) and SHIP_HANDLERS[o.cmd] or HANDLERS[o.cmd]
+		if e and e.ship and not SHIP_HANDLERS[o.cmd] then handler = nil end -- land orders mean nothing to a ship
 		local uc = B.controlled[o.unit]
 		local err
 		if not handler then err = "unknown cmd"
@@ -606,22 +706,37 @@ local function start()
 	B.stream = RUN .. "/battle-" .. B.id .. ".jsonl"
 	B.tick, B.seq, B.controlled, B.phase, B.said = 0, nil, {}, "deployment", nil
 	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n, B.track, B.army_n = nil, nil, false, {}, {}, {}, {}, {}
-	scan()
-	for id in pairs(B.units) do B.static_sent[id] = true end
+	B.naval, B.ship_api_logged, B.ship_logged = false, false, {}
 
 	local armies = {}
+	local n_units = 0
 	local alliances = B.battle:alliances()
 	for a = 1, alliances:count() do
 		local list = alliances:item(a):armies()
 		for r = 1, list:count() do
 			local army = list:item(r)
-			armies[#armies + 1] = { alliance = a, army = r, handicap = call(army, "army_handicap"),
-				units = call(call(army, "units"), "count") }
+			local n = call(call(army, "units"), "count") or 0
+			armies[#armies + 1] = { alliance = a, army = r, handicap = call(army, "army_handicap"), units = n,
+				_army = army }
+			n_units = n_units + n
 		end
 	end
+	-- a naval battle: no army has land units. Only then are the ships read (land battles never call ships()).
+	if n_units == 0 then
+		local n_ships = 0
+		for _, ar in ipairs(armies) do
+			ar.ships = call(call(ar._army, "ships"), "count") or 0
+			n_ships = n_ships + ar.ships
+		end
+		B.naval = n_ships > 0
+		log(string.format("no land units: %d ships - %s", n_ships, B.naval and "naval battle" or "nothing to command"))
+	end
+	for _, ar in ipairs(armies) do ar._army = nil end
+	scan()
+	for id in pairs(B.units) do B.static_sent[id] = true end
 	local units = {}
 	for _, id in ipairs(sorted_ids()) do units[#units + 1] = static_record(id, B.units[id]) end
-	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units })
+	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units, naval = B.naval })
 	-- buildings: once, here at load, before the timer (the discovery run's conditions)
 	local okb, buildings = pcall(scan_buildings)
 	if okb then
@@ -645,7 +760,13 @@ local function start()
 			if type(events[name]) == "table" then table.insert(events[name], function() pcall(on_event, name) end) end
 		end
 	end
-	log("bridge started: battle " .. B.id .. ", " .. #units .. " units, stream " .. B.stream)
+	log("bridge started: battle " .. B.id .. ", " .. #units .. (B.naval and " ships" or " units") .. ", stream " .. B.stream)
+	if B.naval and B.units then
+		for _, e in pairs(B.units) do
+			log("ship methods (read side): " .. method_names(e.unit))
+			break
+		end
+	end
 	pcall(function() B.battle:show_advisor_message("S2AI bridge active", "S2AI bridge active: battle " .. B.id) end)
 end
 

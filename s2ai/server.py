@@ -125,7 +125,10 @@ class GeneralCommander:
             self.next_plan_t = 0.0
             log.info("usage limit should have reset: asking the general again")
             self.board.note(f"t={t:.0f}s usage limit reset: asking the general again")
-        if not self.busy and not self.paused_until and conflict(battle) and t >= self.next_plan_t:
+        # nothing to command (or nobody left to fight): no point asking the model
+        armies_up = any(u.alliance == self.ai and u.fighting_fit for u in units) and \
+            any(u.alliance != self.ai and u.fighting_fit for u in units)
+        if not self.busy and not self.paused_until and armies_up and conflict(battle) and t >= self.next_plan_t:
             self._ask(battle, units, t)
         if self.handed_back:
             return [], []  # control nothing: the bridge gives every unit back to the game's AI
