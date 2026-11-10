@@ -459,13 +459,45 @@ local function read_building(list, i)
 		hp = hp }
 end
 
+-- Run 19: the coroutine scan saw "0 listed": engine calls seemed to return nothing inside a coroutine. This
+-- diagnostic logs, without any risky call, what works where: the list and its count in the main thread (they
+-- always did), one known-safe call in a coroutine, and the first items' handles/names in a coroutine.
+local function coroutine_diagnostic(list)
+	local function in_co(fn)
+		local ok, a, b = coroutine.resume(coroutine.create(fn))
+		return ok and string.format("%s/%s", type(a), type(b)) or ("error: " .. tostring(a))
+	end
+	local parts = {
+		"alliances():count() in a coroutine -> " .. in_co(function()
+			local al = call(B.battle, "alliances")
+			return al, al and call(al, "count")
+		end),
+		"buildings() in a coroutine -> " .. in_co(function()
+			return call(B.battle, "buildings")
+		end),
+	}
+	for i = 1, 3 do
+		parts[#parts + 1] = string.format("item(%d)+name in a coroutine with the main thread's list -> %s", i,
+			in_co(function()
+				local b = call(list, "item", i)
+				return b, b and call(b, "name")
+			end))
+	end
+	log("coroutine diagnostic: " .. table.concat(parts, "; "))
+end
+
 function scan_buildings() -- assigns the local declared at the top
 	B.forts = {}
-	local n = 0
-	do -- even the list and its count come through a coroutine
+	-- the list and its count in the main thread: these two calls never caused trouble (runs 13-18)
+	local list = call(B.battle, "buildings")
+	local n = list and num(call(list, "count")) or 0
+	log(string.format("buildings: main thread sees %s list, count %s", type(list), tostring(n)))
+	if list then pcall(coroutine_diagnostic, list) end
+	if true then return {} end -- diagnostic run: read nothing else
+	do -- (kept for the next step)
 		local co = coroutine.create(function()
-			local list = call(B.battle, "buildings")
-			return list and num(call(list, "count")) or 0
+			local l = call(B.battle, "buildings")
+			return l and num(call(l, "count")) or 0
 		end)
 		local ok, v = coroutine.resume(co)
 		n = (ok and num(v)) or 0
