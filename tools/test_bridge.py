@@ -121,8 +121,11 @@ getmetatable(foreign).__index = function(_, k)
     MOCK_FOREIGN_TOUCHED = true
     return function() return function() end end  -- alliance_owner_id() returns a function, as in run 14
 end
+-- and one building whose name comes back as a function (run 18: the engine returned shifted values)
+local broken = make_building(function() end, 0, 0, 0, -1)
 local buildings = list({ make_building("castle_02_gate_02", 80, 40, 168, 1),
-    make_building("castle_02_wall_10_01", 80, 20, 20, 1), foreign, make_building("village_house_01", -500, 300, 0, -1) })
+    make_building("castle_02_wall_10_01", 80, 20, 20, 1), foreign, broken,
+    make_building("village_house_01", -500, 300, 0, -1) })
 
 MOCK_TIMERS = {}
 empire_battle = {}
