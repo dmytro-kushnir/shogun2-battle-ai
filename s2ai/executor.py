@@ -26,6 +26,30 @@ CAV_LOSS_PULL = 0.2      # ...or as soon as it has lost this share of its men in
 CAV_STAY_BELOW = 0.35    # stay on a target that is down to this share of its men (it is about to break)
 CAV_PULLBACK_M = 110.0   # how far to pull back before charging again
 CAV_PULLBACK_S = 20.0    # longest pull-back
+RETARGET_REACH_M = 250.0 # a replacement target this much farther than the nearest enemy is still considered
+
+
+def matchup(a: U, e: U, stats: dict[str, dict]) -> float:
+    """How bad a fight attacker `a` picks with enemy `e`, as a factor on the distance (1 = neutral, lower =
+    better). Shogun 2 is rock-paper-scissors: spears beat cavalry, cavalry beats missile units, artillery and
+    swords caught in the open, swords beat spears. Battle 120309: each time a gun crew broke, the cavalry
+    re-targeted the nearest enemy - the Kyoto Police spears (+20 vs cavalry) - and lost ~45 men to them."""
+    sa, se = stats.get(a.type, {}), stats.get(e.type, {})
+    f = 1.0
+    if a.kind == "cav":
+        if se.get("vs_cav", 0) > 0:
+            f *= 1 + se["vs_cav"] / 5       # pikes / yari (+20): x5; bayonets (+7): x2.4
+        elif e.kind == "art":
+            f *= 0.5
+        elif e.missile:
+            f *= 0.6
+    elif sa.get("vs_cav", 0) > 0 and e.kind == "cav":
+        f *= 0.5                            # spears go for cavalry
+    elif not a.missile and a.kind == "inf" and se.get("vs_cav", 0) > 0 and not e.missile and sa.get("melee", 0) > se.get("melee", 0):
+        f *= 0.8                            # swords against spears
+    if e.missile and not a.missile and e.kind != "art":
+        f *= 0.9                            # missile units are weak in melee
+    return f
 
 
 def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float]) -> list[tuple[float, float]]:
@@ -60,6 +84,7 @@ class Executor:
         self.ability_log: list[dict] = []                      # every ability sent: {t, unit, ability}
         self.via_slots: dict[int, list[tuple[float, float, float]]] = {}  # unit -> its spots at the group's waypoints
         self.via_reached: dict[int, list[tuple[float, float]]] = {}       # unit -> waypoints it has been through
+        self.retarget: dict[int, int] = {}                      # unit -> the enemy it took on when its target broke
         self.melee: dict[int, tuple[float, int, int]] = {}      # cavalry unit -> (in melee since, its men then, target)
         self.pullback: dict[int, tuple[float, float, float, int]] = {}  # cavalry unit -> (x, y, until, target)
         self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
@@ -101,6 +126,7 @@ class Executor:
         """-> problems (abilities that are not ready are dropped)."""
         self.plan, self.plan_t = plan, t
         self.slots = {}
+        self.retarget = {}  # a new plan: its targets first, replacements chosen afresh
         problems = []
         self.pending_abilities = []
         for a in plan.get("abilities") or []:
@@ -261,6 +287,16 @@ class Executor:
         return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": bearing(x, y, target.x, target.y),
                 "run": True, "_sig": f"pullback:{round(x / 10)}:{round(y / 10)}"}
 
+    def _best_target(self, u: U, enemies: list[U], within: float | None = None) -> U | None:
+        """The enemy to take on: distance weighed by the matchup. within: only enemies closer than this."""
+        if within is not None:
+            enemies = [e for e in enemies if dist(u, e) < within]
+        if not enemies:
+            return None
+        nearest = min(dist(u, e) for e in enemies)
+        pool = [e for e in enemies if dist(u, e) <= nearest + RETARGET_REACH_M]
+        return min(pool, key=lambda e: (dist(u, e) + 20) * matchup(u, e, self.stats))
+
     def _want(self, u: U, by_id: dict[int, U], enemies: list[U]) -> dict | None:
         g = self._group_of(u.id)
         near = min(enemies, key=lambda e: dist(u, e)) if enemies else None
@@ -283,9 +319,10 @@ class Executor:
             if cur is not None and cur.fighting_fit and dist(u, cur) < g["engage_within_m"] * 2:
                 return {"cmd": "attack", "unit": u.id, "target": cur.id, "run": True, "_sig": f"attack:{cur.id}"}
             self.engaged.pop(u.id, None)
-            if near and d < g["engage_within_m"]:
-                self.engaged[u.id] = near.id
-                return {"cmd": "attack", "unit": u.id, "target": near.id, "run": True, "_sig": f"attack:{near.id}"}
+            pick = self._best_target(u, enemies, within=g["engage_within_m"])
+            if pick is not None and not (u.kind == "cav" and matchup(u, pick, self.stats) > 2):
+                self.engaged[u.id] = pick.id  # (cavalry does not ride into spears by reflex)
+                return {"cmd": "attack", "unit": u.id, "target": pick.id, "run": True, "_sig": f"attack:{pick.id}"}
 
         if g is None:
             return None  # not in the plan: keep its last order
@@ -297,10 +334,13 @@ class Executor:
         if task == "attack":
             target = by_id.get(g["target"])
             if target is None or not target.fighting_fit:
-                # target lost: the nearest enemy to this unit
-                if near is None:
-                    return None
-                target = near
+                # target lost: a new one by distance and matchup, kept until it breaks too
+                target = by_id.get(self.retarget.get(u.id, -1))
+                if target is None or not target.fighting_fit:
+                    target = self._best_target(u, enemies)
+                    if target is None:
+                        return None
+                    self.retarget[u.id] = target.id
             return {"cmd": "attack", "unit": u.id, "target": target.id, "run": g["run"] or dist(u, target) < 80,
                     "_sig": f"attack:{target.id}"}
         if task == "withdraw":
