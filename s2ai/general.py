@@ -6,10 +6,12 @@ settings: the model only reads the report and answers with a plan in the PLAN_SC
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -25,6 +27,58 @@ REPO = Path(__file__).resolve().parent.parent
 # ~$0.79 API-equivalent against ~$0.03 for a fresh conversation. The report carries the current plan anyway.
 CONVERSATION_PLANS = 6
 TIMEOUT_S = 90
+LIMIT_FALLBACK_S = 30 * 60  # when a usage-limit message has no reset time we can read
+
+
+class UsageLimit(RuntimeError):
+    """The subscription's usage limit is reached: no plans until `resume_at` (Unix time)."""
+
+    def __init__(self, message: str, resume_at: float):
+        super().__init__(message)
+        self.resume_at = resume_at
+
+
+LIMIT_RE = re.compile(r"(?i)hit your .{0,30}limit|usage limit")
+RESET_RE = re.compile(r"(?i)resets\s+(?:(?:at|on)\s+)?(?:(?P<mon>[a-z]{3})[a-z]*\.?\s+(?P<day>\d{1,2}),?\s+(?:at\s+)?)?"
+                      r"(?P<h>\d{1,2})(?::(?P<m>\d\d))?\s*(?P<ap>am|pm)?(?:\s*\((?P<tz>[^)]+)\))?")
+MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+
+
+def limit_reset(text: str, now: float | None = None) -> float | None:
+    """'You've hit your 5-hour limit · resets 12:10pm (Europe/Kyiv)' -> Unix time of the reset (+1 min);
+    None if the text is not about a usage limit; now + LIMIT_FALLBACK_S if the time cannot be read."""
+    if not LIMIT_RE.search(text or ""):
+        return None
+    now = time.time() if now is None else now
+    epoch = re.search(r"\|(\d{10})\b", text)  # older CLIs: "Claude AI usage limit reached|<unix time>"
+    if epoch:
+        return int(epoch[1]) + 60
+    m = RESET_RE.search(text)
+    if not m:
+        return now + LIMIT_FALLBACK_S
+    tz = None
+    if m["tz"]:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(m["tz"].strip())
+        except Exception:  # noqa: BLE001 - no tz database (Windows without tzdata): local time
+            tz = None
+    base = dt.datetime.fromtimestamp(now, tz) if tz else dt.datetime.fromtimestamp(now)
+    h, mi = int(m["h"]), int(m["m"] or 0)
+    if m["ap"]:
+        h = h % 12 + (12 if m["ap"].lower() == "pm" else 0)
+    if h > 23 or mi > 59:
+        return now + LIMIT_FALLBACK_S
+    if m["mon"] and m["mon"].lower()[:3] in MONTHS:
+        when = base.replace(month=MONTHS.index(m["mon"].lower()[:3]) + 1, day=int(m["day"]), hour=h, minute=mi,
+                            second=0, microsecond=0)
+        if when.timestamp() < now - 86400:
+            when = when.replace(year=when.year + 1)
+    else:
+        when = base.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if when.timestamp() <= now:
+            when += dt.timedelta(days=1)
+    return when.timestamp() + 60
 
 INSTRUCTIONS = """You are the commanding general of one army in a Total War: SHOGUN 2 battle, fighting against a
 human player. Every few seconds you get a battle report and answer with a plan for your army. An executor carries
@@ -53,6 +107,13 @@ How to answer:
   banzai / warcry when the unit is under ~100 m from the enemy it is charging (earlier, the effect is spent
   before contact and the unit outruns its friends), stand_firm for a line about to break, rally when units nearby
   waver or rout, rapid_volley when the enemy is in range, second_wind for tired units.
+- Cavalry hits and runs by itself: after the impact of its charge (about 12 s in melee, 6 s against spears or
+  bayonets, sooner if it is losing men) it pulls back ~110 m and charges the same target again. It stays in the
+  melee against artillery crews and units that are about to break. So give cavalry an `attack` on a target worth
+  charging - guns, missile units, a flank or rear - and do not leave it on a spear or bayonet line's front.
+- UNIT TYPES (at the start of a conversation) gives each type's stats from the game: compare melee/defence/charge,
+  "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
+  advance: cavalry covers ~10 m/s, foot ~4 m/s).
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.
@@ -85,9 +146,11 @@ def system_prompt() -> str:
 
 
 class ClaudeCodeGeneral:
-    def __init__(self, model: str = "sonnet", effort: str = "low", binary: str | None = None):
+    def __init__(self, model: str = "sonnet", effort: str = "low", binary: str | None = None,
+                 conversation_plans: int = CONVERSATION_PLANS):
         self.bin = binary or find_claude()
         self.model, self.effort = model, effort
+        self.conversation_plans = max(1, conversation_plans)
         self.proc: subprocess.Popen | None = None
         self.lines: queue.Queue = queue.Queue()
         self.plans_in_conversation = 0
@@ -96,6 +159,11 @@ class ClaudeCodeGeneral:
 
     def describe(self) -> str:
         return f"claude-code {self.model} effort={self.effort}"
+
+    @property
+    def fresh(self) -> bool:
+        """True if the next plan starts a new conversation (the report must then carry the static info again)."""
+        return self.proc is None or self.proc.poll() is not None or self.plans_in_conversation >= self.conversation_plans
 
     def _start(self) -> None:
         self.close()
@@ -133,7 +201,7 @@ class ClaudeCodeGeneral:
 
     def plan(self, report: str) -> tuple[dict, dict]:
         """-> (raw plan dict, info {seconds, cost, tokens})."""
-        if self.proc is None or self.proc.poll() is not None or self.plans_in_conversation >= CONVERSATION_PLANS:
+        if self.fresh:
             self._start()
         msg = {"type": "user", "message": {"role": "user", "content": report}}
         t0 = time.monotonic()
@@ -156,7 +224,12 @@ class ClaudeCodeGeneral:
                 break
         self.plans_in_conversation += 1
         if ev.get("is_error"):
-            raise RuntimeError(f"claude: {ev.get('result')}")
+            text = str(ev.get("result"))
+            resume = limit_reset(text)
+            if resume is not None:
+                self.close()  # nothing to gain from this process until the reset
+                raise UsageLimit(f"claude: {text}", resume)
+            raise RuntimeError(f"claude: {text}")
         data = ev.get("structured_output")
         if data is None:
             text = ev.get("result", "")

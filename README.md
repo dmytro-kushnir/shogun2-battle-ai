@@ -19,9 +19,9 @@ plain Complete Edition.
 | Custom battles (land) | ✅ played against the general |
 | Historical battles from the menu (Kawanakajima, Nagashino, Okehazama, Sekigahara, Nagashima) | ✅ |
 | Campaign battles, including reinforcements arriving mid-battle | ✅ |
-| Sieges | ⚠️ the general fights them, but does not see walls, gates and towers yet (in progress) |
+| Sieges | ✅ the general sees walls, gates and towers, mans the walls and assaults them |
 | Naval battles | ❓ not tested |
-| Terrain (hills, forests, rivers) | ❌ the general does not see it yet (unit altitude is recorded) |
+| Terrain (hills, forests, rivers) | ⚠️ heights only, learned from where units have stood (the game reports no terrain) |
 | Live map and replays in the browser, also from other devices on your network | ✅ |
 
 ## Requirements
@@ -29,8 +29,9 @@ plain Complete Edition.
 - Windows 10/11, *Total War: SHOGUN 2 - Complete Edition* on Steam (Remastered CE optional).
 - Python 3.12 or newer (`winget install Python.Python.3.14`).
 - [Claude Code](https://claude.com/claude-code), the **native** build (installer from claude.com, not the npm
-  package), installed and logged in: the general runs on your Claude subscription through it. Each plan uses
-  roughly 7-10k tokens; a 7-minute battle needs about 30 plans.
+  package), installed and logged in: the general runs on your Claude subscription through it. A 5-minute battle
+  takes 12-20 plans, ~250-400k input tokens (mostly cached) and ~10-15k output tokens with Sonnet; see
+  [Results and cost](#results-and-cost).
 - [Zig](https://ziglang.org) to build the small native module (`winget install zig.zig`, then open a new terminal
   so `zig` is on the PATH).
 
@@ -76,7 +77,13 @@ side; it guesses from the armies' difficulty handicap), `--commander demo` (no m
 nearest enemy), `--lan` (let other devices on your network open the map; read-only and without a password, so only
 on a network you trust).
 
-If the server stops, the game's own AI takes the army back within 15 seconds.
+Fewer tokens: `--model haiku` (cheapest, weaker), `--far-plan-s 20` (plan at most every 20 s while the armies are
+over 300 m apart; default 15), `--min-plan-s 8` (never plan more often than that), `--conversation-plans 4` (start
+a fresh, shorter conversation sooner; default 6).
+
+If the server stops, the game's own AI takes the army back within 15 seconds. The same happens when Claude cannot
+answer: after three failed plans in a row, or at once when your subscription's usage limit is reached. The server
+then waits for the limit to reset (it reads the time from Claude's message) and takes the army back after that.
 
 > **Do not play multiplayer with the server running.** The server would take one side's army, which in a
 > multiplayer battle may be a human's, and the game would go out of sync. Multiplayer has not been tested; to be
@@ -87,6 +94,18 @@ If the server stops, the game's own AI takes the army back within 15 seconds.
 The map shows every unit (red: the AI, blue: you, yellow outline: under the general's control), the orders being
 sent and the plan's positions, with the general's intent, reasoning and groups beside it. **History** replays any
 past battle with a timeline; click a plan to jump to it and read the exact report the general saw.
+
+### Results and cost
+
+When a battle ends the server writes `runtime\summary-<battle>.json`: the result, men and units lost per side, the
+number of plans, failures, tokens and the API-equivalent cost. For a table of every recorded battle (also written to
+`runtime\battles.csv`):
+
+```powershell
+.\.venv\Scripts\python -m s2ai.summary
+```
+
+"kill ratio" there is the player's casualties per AI casualty.
 
 ### Teach the general
 
@@ -126,8 +145,13 @@ patch only ever lives in the game's memory and ends when the game exits.
   error in the mod cannot break the battle.
 - **General.** `s2ai/report.py` writes a compact battle report; Claude answers with a plan in a fixed JSON schema
   (`s2ai/plan.py`): groups of units with a task (attack / move / hold / withdraw), position, facing, and reflexes.
-  `s2ai/executor.py` carries it out every half second without calling the model: lines by frontage, re-targeting,
-  engaging what comes close, missile units keeping their distance.
+  `s2ai/executor.py` carries it out every half second without calling the model: lines by frontage, routes
+  around a flank, re-targeting, engaging what comes close, missile units keeping their distance, cavalry pulling
+  back after a charge to charge again, special abilities only when ready.
+- **Game data.** Unit stats (melee, defence, charge, armour, morale, speed), special abilities with their durations,
+  and their icons are read from the game's own `data.pack` at run time and cached in `runtime/` (field layouts from
+  the community [RPFM schemas](https://github.com/Frodo45127/rpfm-schemas)). Nothing from the game is in this
+  repository.
 
 ## Development
 
@@ -136,6 +160,7 @@ patch only ever lives in the game's memory and ends when the game exits.
 .\.venv\Scripts\python tools\test_bridge.py      # bridge + server end to end against a mock battle, no game
 .\.venv\Scripts\python tools\check_installed.py  # the installed loaders compile and never raise
 .\.venv\Scripts\python tools\try_general.py runtime\battle-<id>.jsonl --at 60   # one real plan on a recorded battle
+.\.venv\Scripts\python tools\try_general.py runtime\battle-<id>.jsonl --at 60 --report-only   # just the report
 .\tools\packtool.ps1 -Pack <pack> -Filter 'battle_script$'   # list / extract files from SHOGUN 2 packs (PFH3 and CE's PFHs)
 ```
 

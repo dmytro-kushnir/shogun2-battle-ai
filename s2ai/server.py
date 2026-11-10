@@ -4,6 +4,11 @@
     .venv\\Scripts\\python -m s2ai.server --model opus --effort medium
     .venv\\Scripts\\python -m s2ai.server --commander demo     # no model: every AI unit attacks the nearest enemy
     .venv\\Scripts\\python -m s2ai.server --ai-alliance 1      # which alliance is the AI's (default: guessed)
+    .venv\\Scripts\\python -m s2ai.server --model haiku --far-plan-s 20 --conversation-plans 4   # cheaper
+
+Plans that fail are retried with a growing delay; after FAIL_HANDBACK failures in a row, or at once when the
+Claude usage limit is reached, the army goes back to the game's own AI (until the limit resets, then planning
+resumes). runtime/summary-<battle>.json is written when a battle ends (python -m s2ai.summary: all battles).
 
 Live map: http://127.0.0.1:8765 . Plans are logged to runtime/plans-<battle>.jsonl.
 Ctrl+C stops it; the bridge hands every unit back to the game's AI within 15 s.
@@ -11,9 +16,9 @@ Ctrl+C stops it; the bridge hands every unit back to the game's AI within 15 s.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
-
 import queue
 import threading
 import time
@@ -21,9 +26,10 @@ import webbrowser
 
 from . import report
 from .executor import Executor
-from .gamedata import ability_icons, ability_timings, unit_abilities
+from .gamedata import ability_icons, ability_timings, unit_abilities, unit_stats
 from .link import GameLink
 from .plan import validate
+from .summary import summarize
 from .viewer import Board, lan_addresses, serve
 
 log = logging.getLogger("s2ai")
@@ -31,6 +37,8 @@ log = logging.getLogger("s2ai")
 POLL_S = 0.25
 HEARTBEAT_S = 3.0
 START_PLANNING_AFTER_S = 120  # if the conflict-phase event never arrives
+FAIL_HANDBACK = 3             # failed plans in a row before the army goes back to the game's AI
+FAR_M = 300.0                 # armies this far apart: plan at most every --far-plan-s
 
 
 def guess_ai_alliance(start: dict) -> int:
@@ -77,17 +85,27 @@ class DemoCommander:
 class GeneralCommander:
     """The LLM plans in a background thread; the executor carries the latest plan out every tick."""
 
-    def __init__(self, ai: int, general, battle_id: str, board: Board, link: GameLink):
+    def __init__(self, ai: int, general, battle_id: str, board: Board, link: GameLink,
+                 min_plan_s: float = 0.0, far_plan_s: float = 0.0):
         self.ai, self.general, self.battle_id, self.board, self.link = ai, general, battle_id, board, link
+        self.min_plan_s, self.far_plan_s = min_plan_s, far_plan_s
         self.timings = ability_timings()  # {ability: {active, recharge, uses}}, from the game's database
-        self.executor = Executor(ai, self.timings)
+        self.stats = unit_stats()         # {unit type: stats}, from the game's database
+        self.executor = Executor(ai, self.timings, self.stats)
+        self.failures = 0                 # failed plans in a row
+        self.paused_until = 0.0           # wall clock: usage limit reached, the game's AI fights until then
+        self.handed_back = False          # the army is with the game's AI (no plan to carry out)
         self.results: queue.Queue = queue.Queue()
         self.busy = False
         self.next_plan_t = 0.0
         self.plan_t = 0.0
         self.plans = 0
         self.plan_log = link.runtime / f"plans-{battle_id}.jsonl"
+        self.fail_log = link.runtime / f"failures-{battle_id}.jsonl"
         self.abilities = unit_abilities()  # {unit type: special abilities}, from the game's database (cached)
+
+    def extra_summary(self) -> dict:
+        return {"cavalry_pullbacks": len(self.executor.pullbacks)}
 
     def decide(self, battle) -> tuple[list[int], list[dict]] | None:
         state = battle.state
@@ -102,24 +120,35 @@ class GeneralCommander:
             self._apply(raw, info, report_text, asked_t, units, t, battle)
         except queue.Empty:
             pass
-        if not self.busy and conflict(battle) and t >= self.next_plan_t:
+        if self.paused_until and time.time() >= self.paused_until:
+            self.paused_until = 0.0
+            self.next_plan_t = 0.0
+            log.info("usage limit should have reset: asking the general again")
+            self.board.note(f"t={t:.0f}s usage limit reset: asking the general again")
+        if not self.busy and not self.paused_until and conflict(battle) and t >= self.next_plan_t:
             self._ask(battle, units, t)
+        if self.handed_back:
+            return [], []  # control nothing: the bridge gives every unit back to the game's AI
         if self.executor.plan is None:
             return None
         self.executor.set_buildings(battle.buildings)
-        n = len(self.executor.ability_log)
+        n, npb = len(self.executor.ability_log), len(self.executor.pullbacks)
         decision = self.executor.tick(units, t)
         if len(self.executor.ability_log) != n:
             for a in self.executor.ability_log[n:]:
                 self.board.note(f"t={t:.0f}s {a['unit']} uses {a['ability']}")
             self.board.update(ab_used=list(self.executor.ability_log))
+        for pb in self.executor.pullbacks[npb:]:
+            self.board.note(f"t={t:.0f}s cavalry {pb['unit']} pulls back from {pb['target']} to charge again")
         return decision
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
                                t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain,
                                battle.morale, self.abilities,
-                               ability_state=lambda uid, a: self.executor.ability_text(uid, a, t))
+                               ability_state=lambda uid, a: self.executor.ability_text(uid, a, t),
+                               unit_stats=self.stats, unit_note=self.executor.unit_note,
+                               static_info=getattr(self.general, "fresh", True))
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -128,16 +157,19 @@ class GeneralCommander:
                 raw, info = self.general.plan(text)
                 self.results.put((raw, info, text, t))
             except Exception as e:  # noqa: BLE001 - report and retry later
-                self.results.put((None, {"error": str(e)}, text, t))
+                self.results.put((None, {"error": str(e), "resume_at": getattr(e, "resume_at", None)}, text, t))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _apply(self, raw, info, report_text, asked_t, units, t, battle) -> None:
         if raw is None:
-            log.warning("plan failed: %s", info.get("error"))
-            self.board.note(f"t={t:.0f}s plan FAILED: {info.get('error')}")
-            self.next_plan_t = t + 5
+            self._failed(info, t)
             return
+        self.failures = 0
+        if self.handed_back:
+            log.info("the general is back: taking the army from the game's AI")
+            self.board.note(f"t={t:.0f}s the general takes command again")
+            self.handed_back = False
         ours = {u.id for u in units if u.alliance == self.ai}
         enemies = {u.id for u in units if u.alliance != self.ai}
         forts = {f["id"] for f in report.fortifications(battle.buildings)}
@@ -146,7 +178,10 @@ class GeneralCommander:
         problems += self.executor.set_plan(plan, units, t)
         self.plan_t = t
         self.plans += 1
-        self.next_plan_t = t + plan["next_plan_in_s"]
+        wait = max(plan["next_plan_in_s"], self.min_plan_s)
+        if self.far_plan_s and self._far_apart(units):
+            wait = max(wait, self.far_plan_s)
+        self.next_plan_t = t + wait
         self.link.say = plan["intent"]
         log.info("plan #%d (%.1fs, ~$%.3f API-equivalent): %s", self.plans, info.get("seconds", 0),
                  info.get("api_equiv_usd", 0), plan["intent"])
@@ -158,12 +193,51 @@ class GeneralCommander:
             f.write(json.dumps({"t": t, "asked_t": asked_t, "info": info, "problems": problems, "plan": plan,
                                 "raw": raw, "report": report_text}) + "\n")
 
+    def _far_apart(self, units) -> bool:
+        ours = [u for u in units if u.alliance == self.ai and u.fighting_fit]
+        theirs = [u for u in units if u.alliance != self.ai and u.fighting_fit]
+        return bool(ours and theirs) and min(report.dist(a, b) for a in ours for b in theirs) > FAR_M
+
+    def _failed(self, info: dict, t: float) -> None:
+        err, resume = info.get("error"), info.get("resume_at")
+        self.failures += 1
+        with self.fail_log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": t, "error": err, "limit": resume is not None}) + "\n")
+        if resume is not None and resume > time.time():
+            # nothing to gain by asking every few seconds until the reset (battle 091516: ~200 s of retries)
+            self.paused_until = resume
+            until = dt.datetime.fromtimestamp(resume).strftime("%H:%M")
+            log.warning("usage limit reached (%s): the game's AI commands the army until %s", err, until)
+            self.board.note(f"t={t:.0f}s usage limit reached: the game's AI commands the army until {until}")
+            self._hand_back(f"The general is out of contact until {until}; the army fights on its own.")
+            return
+        delay = min(60.0, 5.0 * 2 ** (self.failures - 1))
+        self.next_plan_t = t + delay
+        log.warning("plan failed (%d in a row, next try in %.0f s): %s", self.failures, delay, err)
+        self.board.note(f"t={t:.0f}s plan FAILED ({self.failures} in a row): {err}")
+        if self.failures >= FAIL_HANDBACK:
+            self._hand_back("The general is out of contact; the army fights on its own.")
+
+    def _hand_back(self, say: str) -> None:
+        if not self.handed_back:
+            log.info("handing the army back to the game's AI")
+            self.handed_back = True
+            self.executor.plan = None  # a stale plan must not run on when the general comes back
+            self.link.say = say
+            self.board.update(plan=None)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--commander", choices=["general", "demo"], default="general")
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
+    ap.add_argument("--conversation-plans", type=int, default=6,
+                    help="plans per conversation before a fresh one (each plan re-reads the whole conversation)")
+    ap.add_argument("--min-plan-s", type=float, default=0.0,
+                    help="never plan more often than this (the general asks for 4-30 s)")
+    ap.add_argument("--far-plan-s", type=float, default=15.0,
+                    help=f"while the armies are over {FAR_M:.0f} m apart, plan at most this often (0 = off)")
     ap.add_argument("--ai-alliance", type=int, help="alliance index (1-based) the server commands")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--lan", action="store_true",
@@ -185,7 +259,8 @@ def main() -> None:
     general = None
     if args.commander == "general":
         from .general import ClaudeCodeGeneral
-        general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
+        general = ClaudeCodeGeneral(model=args.model, effort=args.effort,
+                                    conversation_plans=args.conversation_plans)
         log.info("general: %s", general.describe())
 
     try:
@@ -200,16 +275,36 @@ def main() -> None:
     last_write = 0.0
     last_tick = -1
     log.info("waiting for a battle (runtime: %s)", link.runtime)
+    summarized: set[str] = set()
+
+    def write_summary(bid: str | None) -> None:
+        if not bid or bid in summarized:
+            return
+        summarized.add(bid)
+        try:
+            extra = commander.extra_summary() if hasattr(commander, "extra_summary") else {}
+            sm = summarize(bid, link.runtime, extra)
+            if sm:
+                (link.runtime / f"summary-{bid}.json").write_text(json.dumps(sm, indent=1), encoding="utf-8")
+                log.info("battle %s: %s after %d s; AI kept %.0f%% of its men fighting, the player %.0f%%; "
+                         "%d plans, ~$%.2f API-equivalent", bid, sm["result"], sm["duration_s"],
+                         100 * sm["ai"]["fighting_share"], 100 * sm["player"]["fighting_share"], sm["plans"],
+                         sm["api_equiv_usd"])
+        except Exception:  # noqa: BLE001 - a summary must never stop the server
+            log.exception("could not summarize battle %s", bid)
+
     while True:
         for msg in link.poll():
             kind = msg.get("type")
             if kind == "battle_start":
                 b = link.battle
+                if battle_id != b.id:
+                    write_summary(battle_id)  # the last battle was left without a battle_end
                 ai = args.ai_alliance or guess_ai_alliance(msg)
                 battle_id, take, link.say = b.id, [], None
                 if general is not None:
                     general.close()  # a fresh conversation per battle
-                    commander = GeneralCommander(ai, general, b.id, board, link)
+                    commander = GeneralCommander(ai, general, b.id, board, link, args.min_plan_s, args.far_plan_s)
                 else:
                     commander = DemoCommander(ai)
                 armies = ", ".join(f"a{a['alliance']}/{a['army']}: {a['units']} units hcp {a['handicap']}"
@@ -230,6 +325,7 @@ def main() -> None:
             elif kind == "battle_end":
                 log.info("battle %s ended", msg.get("battle"))
                 board.note("battle ended")
+                write_summary(battle_id)
         b = link.battle
         if b is not None and commander is not None and b.id == battle_id and not b.ended and b.state is not None:
             if b.state["tick"] != last_tick:

@@ -15,6 +15,18 @@ DEFAULT_WIDTH_M = 30.0
 VIA_REACHED_M = 30.0     # a unit counts as through a waypoint this close to it
 DEFAULT_TIMING = {"active": 30.0, "recharge": 180.0, "uses": -1}
 
+# Cavalry hit-and-run: a charge does its damage on impact; cavalry that stays in a melee bleeds (battle 091516:
+# three units that reached the guns intact went from ~210 men to ~20 in 40 s of melee next to the Marines). So
+# cavalry in contact pulls back once the charge is spent and charges again - unless it is cutting down artillery
+# crews or a unit that is about to break.
+CAV_CONTACT_M = 30.0     # centres this close: in melee
+CAV_MELEE_S = 12.0       # pull out after this long in melee...
+CAV_MELEE_SPEARS_S = 6.0 # ...or this long against units with a bonus against cavalry (spears, bayonets)
+CAV_LOSS_PULL = 0.2      # ...or as soon as it has lost this share of its men in this melee
+CAV_STAY_BELOW = 0.35    # stay on a target that is down to this share of its men (it is about to break)
+CAV_PULLBACK_M = 110.0   # how far to pull back before charging again
+CAV_PULLBACK_S = 20.0    # longest pull-back
+
 
 def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float]) -> list[tuple[float, float]]:
     """n positions side by side, centred on (cx, cy), in a line facing `facing` (compass degrees)."""
@@ -32,9 +44,10 @@ def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float])
 
 
 class Executor:
-    def __init__(self, ai: int, timings: dict[str, dict] | None = None):
+    def __init__(self, ai: int, timings: dict[str, dict] | None = None, stats: dict[str, dict] | None = None):
         self.ai = ai
         self.timings = timings or {}  # ability -> {active, recharge, uses} from the game's database
+        self.stats = stats or {}      # unit type -> stats from the game's database
         self.plan: dict | None = None
         self.plan_t = 0.0
         self.slots: dict[int, tuple[float, float, float]] = {}  # unit -> (x, y, facing) of its group's line
@@ -47,6 +60,9 @@ class Executor:
         self.ability_log: list[dict] = []                      # every ability sent: {t, unit, ability}
         self.via_slots: dict[int, list[tuple[float, float, float]]] = {}  # unit -> its spots at the group's waypoints
         self.via_reached: dict[int, list[tuple[float, float]]] = {}       # unit -> waypoints it has been through
+        self.melee: dict[int, tuple[float, int, int]] = {}      # cavalry unit -> (in melee since, its men then, target)
+        self.pullback: dict[int, tuple[float, float, float, int]] = {}  # cavalry unit -> (x, y, until, target)
+        self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -172,7 +188,7 @@ class Executor:
         orders, take = [], []
         for u in ours:
             take.append(u.id)
-            want = self._want(u, by_id, enemies)
+            want = self._hit_and_run(u, self._want(u, by_id, enemies), by_id, enemies, t)
             if want is None:
                 continue
             sig = want.pop("_sig")
@@ -192,6 +208,55 @@ class Executor:
         self.pending_abilities = []
         self.last_orders = orders
         return take, orders
+
+    def unit_note(self, uid: int) -> str:
+        """What the executor is doing with the unit on its own, for the report."""
+        if uid in self.pullback:
+            return " | pulling back after its charge, will charge again"
+        return ""
+
+    def _hit_and_run(self, u: U, want: dict | None, by_id: dict[int, U], enemies: list[U], t: float) -> dict | None:
+        pb = self.pullback.get(u.id)
+        if pb is not None:
+            x, y, until, target = pb
+            tgt = by_id.get(target)
+            if t < until and math.hypot(u.x - x, u.y - y) > 15 and tgt is not None and tgt.fighting_fit:
+                return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": bearing(x, y, tgt.x, tgt.y),
+                        "run": True, "_sig": f"pullback:{round(x / 10)}:{round(y / 10)}"}
+            del self.pullback[u.id]  # back far enough (or the target is gone): charge again
+            self.melee.pop(u.id, None)
+        if u.kind != "cav" or want is None or want.get("cmd") != "attack":
+            self.melee.pop(u.id, None)
+            return want
+        target = by_id.get(want["target"])
+        if target is None:
+            return want
+        d = dist(u, target)
+        m = self.melee.get(u.id)
+        if d > CAV_CONTACT_M:
+            if m is not None and d > CAV_CONTACT_M * 2:  # centres jitter in a melee: only a clear gap ends it
+                del self.melee[u.id]
+            return want
+        if m is None or m[2] != target.id:
+            self.melee[u.id] = (t, u.men, target.id)
+            return want
+        since, men_then, _ = m
+        st = self.stats.get(target.type, {})
+        lost = (men_then - u.men) / men_then if men_then else 0.0
+        hold = CAV_MELEE_SPEARS_S if st.get("vs_cav", 0) > 0 else CAV_MELEE_S
+        if lost < CAV_LOSS_PULL and (target.kind == "art" or (target.men0 and target.men < target.men0 * CAV_STAY_BELOW)
+                                     or t - since < hold):
+            return want
+        # pull back away from the enemies around it, then charge again
+        close = [e for e in enemies if dist(u, e) < 150] or [target]
+        cx, cy = sum(e.x for e in close) / len(close), sum(e.y for e in close) / len(close)
+        away = math.radians(bearing(cx, cy, u.x, u.y))
+        x, y = u.x + math.sin(away) * CAV_PULLBACK_M, u.y + math.cos(away) * CAV_PULLBACK_M
+        self.pullback[u.id] = (x, y, t + CAV_PULLBACK_S, target.id)
+        self.pullbacks.append({"t": t, "unit": u.id, "target": target.id})
+        self.melee.pop(u.id, None)
+        return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": bearing(x, y, target.x, target.y),
+                "run": True, "_sig": f"pullback:{round(x / 10)}:{round(y / 10)}"}
 
     def _want(self, u: U, by_id: dict[int, U], enemies: list[U]) -> dict | None:
         g = self._group_of(u.id)

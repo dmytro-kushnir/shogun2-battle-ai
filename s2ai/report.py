@@ -272,12 +272,45 @@ def formation_section(theirs: list[U], ours: list[U]) -> list[str]:
     return out
 
 
+def unit_types_section(units: list[U], ai: int, stats: dict[str, dict]) -> list[str]:
+    """One line per unit type on the field with its stats from the game's database."""
+    count: dict[str, list[int]] = {}
+    for u in units:
+        if u.alive:
+            count.setdefault(u.type, [0, 0])[0 if u.alliance == ai else 1] += 1
+    lines = []
+    for t, (mine, theirs) in sorted(count.items(), key=lambda kv: (-kv[1][0], kv[0])):
+        st = stats.get(t)
+        if not st:
+            continue
+        side = ", ".join(([f"yours {mine}"] if mine else []) + ([f"enemy {theirs}"] if theirs else []))
+        parts = [f"melee {st['melee']}", f"defence {st['defence']}", f"charge +{st['charge']}",
+                 f"armour {st['armour']}", f"morale {st['morale']}"]
+        if st.get("vs_cav"):
+            parts.append(f"+{st['vs_cav']} vs cavalry")
+        if st.get("ammo") and st.get("accuracy"):
+            parts.append(f"accuracy {st['accuracy']}")
+        if st.get("run"):
+            parts.append(f"runs {st['run']:g} m/s")
+        if st.get("traits"):
+            parts.append(", ".join(st["traits"]))
+        lines.append(f"  {pretty_type(t)[:34]} ({side}): {', '.join(parts)}")
+    if not lines:
+        return []
+    return ["", "UNIT TYPES (from the game's database; higher is better; speeds are full running speed, horses "
+                "~10 m/s, men on foot ~4):"] + lines
+
+
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
           plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None,
           morale=None, abilities: dict[str, list[str]] | None = None,
-          ability_state=None) -> tuple[str, list[U]]:
+          ability_state=None, unit_stats: dict[str, dict] | None = None, unit_note=None,
+          static_info: bool = True) -> tuple[str, list[U]]:
     """abilities: {unit type: usable special abilities} (gamedata.unit_abilities); ability_state(unit id, ability)
-    -> text with its state, e.g. "rally (ready)" (Executor.ability_text)."""
+    -> text with its state, e.g. "rally (ready)" (Executor.ability_text); unit_stats: {unit type: stats}
+    (gamedata.unit_stats); unit_note(unit id) -> extra text for our unit's line (what the executor does with it).
+    static_info: include what does not change in a battle (unit type stats, ability descriptions) - the general
+    keeps it in its conversation, so it is only needed when a conversation starts."""
     units = merge(static, state)
     abilities = abilities or {}
 
@@ -309,13 +342,16 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
         out.extend(formation_section(theirs, ours))
     if terrain is not None:
         out.extend(terrain.section())
+    if static_info and unit_stats:
+        out.extend(unit_types_section(units, ai, unit_stats))
     out.append("")
     out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
         out.append(unit_line(u, fit_theirs, show_nearest=True,
-                             extra=mtag(u) + (fire_tag(u, fit_theirs) if u.fighting_fit else "") + ab_tag(u)))
+                             extra=mtag(u) + (fire_tag(u, fit_theirs) if u.fighting_fit else "") + ab_tag(u)
+                             + ((unit_note(u.id) or "") if unit_note and u.fighting_fit else "")))
     ours_ab = sorted({a for u in ours if u.fighting_fit for a in abilities.get(u.type, [])})
-    if ours_ab:
+    if ours_ab and static_info:
         from .gamedata import ABILITIES
         out.append("  Special abilities (use with `abilities` in the plan; only when ready - each lasts a while, "
                    "then recharges):")

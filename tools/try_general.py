@@ -1,6 +1,7 @@
 """Ask the real general (Claude Code) for one plan on a recorded battle, without the game.
 
     .venv\\Scripts\\python tools\\try_general.py runtime\\battle-<id>.jsonl [--at 60] [--ai 2] [--model ...]
+    .venv\\Scripts\\python tools\\try_general.py runtime\\battle-<id>.jsonl --at 60 --report-only   # no model call
 
 Prints the report the model sees, the plan, any validation problems and the orders the executor would send.
 """
@@ -14,7 +15,7 @@ sys.path.insert(0, str(REPO))
 
 from s2ai import report  # noqa: E402
 from s2ai.executor import Executor  # noqa: E402
-from s2ai.gamedata import ability_timings, unit_abilities  # noqa: E402
+from s2ai.gamedata import ability_timings, unit_abilities, unit_stats  # noqa: E402
 from s2ai.general import ClaudeCodeGeneral  # noqa: E402
 from s2ai.link import GameLink  # noqa: E402
 from s2ai.plan import validate  # noqa: E402
@@ -26,6 +27,7 @@ ap.add_argument("--at", type=float, default=60.0, help="battle time (s) of the s
 ap.add_argument("--ai", type=int)
 ap.add_argument("--model", default="sonnet")
 ap.add_argument("--effort", default="low")
+ap.add_argument("--report-only", action="store_true", help="print the report, do not ask the model")
 args = ap.parse_args()
 
 # replay the stream up to --at through the same link the server uses (terrain, morale history, buildings)
@@ -44,10 +46,14 @@ for line in pathlib.Path(args.stream).read_text().splitlines():
 b = link.battle
 ai = args.ai or guess_ai_alliance(start)
 abilities = unit_abilities()
-ex = Executor(ai, ability_timings())
+stats = unit_stats()
+ex = Executor(ai, ability_timings(), stats)
 text, units = report.build(b.static, b.state, ai, b.events, None, None, b.buildings, b.terrain, b.morale, abilities,
-                           ability_state=lambda uid, a: ex.ability_text(uid, a, b.state["t"]))
+                           ability_state=lambda uid, a: ex.ability_text(uid, a, b.state["t"]), unit_stats=stats,
+                           unit_note=ex.unit_note)
 print(text)
+if args.report_only:
+    sys.exit(0)
 print("\n" + "=" * 100)
 general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
 raw, info = general.plan(text)

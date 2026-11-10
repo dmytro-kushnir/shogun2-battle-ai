@@ -1,4 +1,4 @@
-"""Facts read from the game's own database: which special abilities each unit type has.
+"""Facts read from the game's own database: unit stats and which special abilities each unit type has.
 
 The battle-script API can trigger an ability (unitcontroller:perform_special_ability(name)) but cannot list a
 unit's abilities, so they come from db/unit_to_unit_abilities_junctions in the game's data.pack (Remastered CE's
@@ -166,7 +166,129 @@ def parse_timings(b: bytes, keys) -> dict[str, dict]:
     return out
 
 
-CACHE_VERSION = 2
+class _Row:
+    """Reads one db row field by field (Shogun 2 db encoding: UTF-16 strings with a u16 length, optional strings
+    with a bool byte in front, 1-byte booleans, little-endian numbers)."""
+
+    def __init__(self, b: bytes, p: int):
+        self.b, self.p = b, p
+
+    def s(self) -> str:
+        n, = struct.unpack_from("<H", self.b, self.p)
+        v = self.b[self.p + 2:self.p + 2 + 2 * n].decode("utf-16le")
+        self.p += 2 + 2 * n
+        return v
+
+    def o(self) -> str:
+        self.p += 1
+        return self.s() if self.b[self.p - 1] else ""
+
+    def i(self) -> int:
+        self.p += 4
+        return struct.unpack_from("<i", self.b, self.p - 4)[0]
+
+    def f(self) -> float:
+        self.p += 4
+        return struct.unpack_from("<f", self.b, self.p - 4)[0]
+
+    def bool(self) -> bool:
+        self.p += 1
+        if self.b[self.p - 1] > 1:
+            raise ValueError("not a boolean")
+        return bool(self.b[self.p - 1])
+
+
+def _table_version(b: bytes) -> int:
+    p = 0
+    if b[:4] == b"\xfd\xfe\xfc\xff":
+        n, = struct.unpack_from("<H", b, 4)
+        p = 6 + 2 * n
+    return struct.unpack_from("<I", b, p + 4)[0] if b[p:p + 4] == b"\xfc\xfd\xfe\xff" else 0
+
+
+# Field order of the game's db tables: the community schema of RPFM (github.com/Frodo45127/rpfm-schemas,
+# schema_sho2.ron) - unit_stats_land version 16, battle_entities version 0.
+
+
+# unit_stats_land version 16, one letter per field: S string, O optional string, I i32, F f32, B boolean
+STATS_LAYOUT = "SIIISOOSSSSISIOOOIIOOOOBOOIISSOIOSIIIIIISSSSIIFFFFFFFFFIBBBBBBBBBBBBBBFFFBBBBBIBBBBBBBBBBOOOBBSSSSSSSSBBBBBBFFFFB"
+F = {n: i for i, n in enumerate((
+    "key men horse guns officer musician standard_bearer soldier_model man_entity man_animations equipment_theme "
+    "armour armour_audio man_health mount_model mount_entity mount_animations mount_armour mount_health "
+    "articulated_entity caisson_entity caisson_model artillery_model siege_gun gun_type primary_missile_weapon "
+    "marksmanship loading_skill missile_attack firing_mechanism missile_type ammo skeleton_missile melee_weapon "
+    "melee_attack charge_bonus dis_melee dis_charge melee_defence shield_bonus skeleton_melee pistols drill_set "
+    "training morale rank_depth f1 f2 f3 f4 f5 f6 f7 f8 density vs_cav grenades skirmish guard_mode can_dismount "
+    "stakes cannot_run can_rally hide1 hide2 hide3 hide4 can_stalk can_snipe fires_mounted spot1 spot2 spot3 "
+    "camp1 camp2 disciplined impetuous scares_horses fear inspire fatigue_resistant siege_ladders heat cold "
+    "formed_attack pike_wall pike_square no_attrition fire_moving musician_2 caisson_destroyed caisson_destruction "
+    "all_ranks_fire guerrilla a1 a2 a3 a4 a5 a6 a7 a8 climb_fast fire_buildings fire_ground ap_missile ap_melee "
+    "loose_formation v1 v2 v3 v4 bulletproof").split())}
+assert len(F) == len(STATS_LAYOUT)
+TRAITS = {"disciplined": "disciplined", "impetuous": "impetuous", "scares_horses": "scares horses",
+          "inspire": "inspires", "fatigue_resistant": "fatigue resistant", "stakes": "can place stakes",
+          "can_stalk": "stealth", "ap_missile": "armour-piercing missiles", "ap_melee": "armour-piercing melee",
+          "bulletproof": "bulletproof"}
+
+
+def read_rows(b: bytes, layout: str) -> list[list]:
+    """Every row of a db table, given its field layout. Raises ValueError if the layout does not fit."""
+    p = 0
+    if b[:4] == b"\xfd\xfe\xfc\xff":
+        n, = struct.unpack_from("<H", b, 4)
+        p = 6 + 2 * n
+    if b[p:p + 4] == b"\xfc\xfd\xfe\xff":
+        p += 8
+    rows, = struct.unpack_from("<I", b, p + 1)
+    r = _Row(b, p + 5)
+    read = {"S": r.s, "O": r.o, "I": r.i, "F": r.f, "B": r.bool}
+    out = []
+    try:
+        for _ in range(rows):
+            out.append([read[c]() for c in layout])
+    except (struct.error, UnicodeDecodeError, IndexError) as e:
+        raise ValueError(f"row {len(out)}: {e}") from None
+    if r.p != len(b):
+        raise ValueError(f"unexpected table layout ({r.p} of {len(b)} bytes read)")
+    return out
+
+
+def parse_unit_stats(b: bytes) -> dict[str, dict]:
+    """db/unit_stats_land (version 16) -> {unit type: stats}."""
+    if _table_version(b) != 16:
+        raise ValueError(f"unit_stats_land version {_table_version(b)}, expected 16")
+    out = {}
+    for row in read_rows(b, STATS_LAYOUT):
+        v = lambda name: row[F[name]]
+        horses = v("horse")
+        traits = [text for name, text in TRAITS.items() if v(name)] + (["causes fear"] if v("fear") > 0 else [])
+        out[v("key")] = {
+            "men": v("men"), "horses": horses, "guns": v("guns"), "melee": v("melee_attack"),
+            "charge": v("charge_bonus"), "defence": v("melee_defence"), "shield": v("shield_bonus"),
+            "armour": v("armour") + (v("mount_armour") if horses else 0),
+            "hp": v("man_health") + (v("mount_health") if horses else 0), "morale": v("morale"),
+            "vs_cav": v("vs_cav"), "ammo": v("ammo"), "accuracy": v("marksmanship"), "reload": v("loading_skill"),
+            "weapon": v("melee_weapon"), "traits": traits,
+            "_entity": v("mount_entity") if horses and v("mount_entity") else v("man_entity")}
+    return out
+
+
+# battle_entities version 0: key, class validation, type, walk / run speed, acceleration, deceleration, charge
+# speed, crawl speed, 3 charge distances, radius, shape, radii ratio, mass, height, 2 fire arcs, turn speed, hit points
+ENTITY_LAYOUT = "SSSFFFFFFFFFFSFFFFFFI"
+
+
+def parse_entities(b: bytes) -> dict[str, dict]:
+    """db/battle_entities (version 0) -> {entity: {walk, run, charge_speed} in m/s}."""
+    if _table_version(b) != 0:
+        raise ValueError(f"battle_entities version {_table_version(b)}, expected 0")
+    return {r[0]: {"walk": round(r[3], 1), "run": round(r[4], 1), "charge_speed": round(r[7], 1)}
+            for r in read_rows(b, ENTITY_LAYOUT)}
+
+
+CACHE_VERSION = 3
+STATS = "db\\unit_stats_land_tables\\unit_stats_land"
+ENTITIES = "db\\battle_entities_tables\\battle_entities"
 
 
 def _data_packs() -> list[Path]:
@@ -175,8 +297,8 @@ def _data_packs() -> list[Path]:
 
 
 def game_data() -> dict:
-    """{"units": {unit type: usable abilities}, "timings": {ability: {active, recharge, uses}}} from the installed
-    game (cached in runtime/). Empty if the game is not found."""
+    """{"units": {unit type: usable abilities}, "timings": {ability: {active, recharge, uses}},
+    "stats": {unit type: stats}} from the installed game (cached in runtime/). Empty if the game is not found."""
     packs = _data_packs()
     stamp = [[str(p), p.stat().st_mtime] for p in packs]
     try:
@@ -187,31 +309,45 @@ def game_data() -> dict:
         pass
     units: dict[str, list[str]] = {}
     timings: dict[str, dict] = {}
+    stats: dict[str, dict] = {}
+    entities: dict[str, dict] = {}
     for pack in reversed(packs):  # Remastered CE last: its rows win
         try:
-            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS])
-            if JUNCTIONS in got:
-                units.update(parse_junctions(got[JUNCTIONS]))
-            if TIMINGS in got:
-                timings.update(parse_timings(got[TIMINGS], ABILITIES))
-        except (OSError, ValueError, struct.error) as e:
-            log.warning("could not read unit abilities from %s: %s", pack, e)
+            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES])
+        except OSError as e:
+            log.warning("could not read %s: %s", pack, e)
+            continue
+        for name, parse, into in ((JUNCTIONS, parse_junctions, units),
+                                  (TIMINGS, lambda b: parse_timings(b, ABILITIES), timings),
+                                  (STATS, parse_unit_stats, stats), (ENTITIES, parse_entities, entities)):
+            if name in got:
+                try:
+                    into.update(parse(got[name]))
+                except (ValueError, struct.error) as e:
+                    log.warning("could not read %s from %s: %s", name.rsplit("\\", 1)[-1], pack, e)
+    for st in stats.values():  # speeds come from the man's entity, or the horse's for cavalry
+        st.update(entities.get(st.pop("_entity"), {}))
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
-    data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings}
+    data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats}
     try:
         CACHE.parent.mkdir(exist_ok=True)
         CACHE.write_text(json.dumps(data), encoding="utf-8")
     except OSError:
         pass
-    log.info("game data: %d unit types with usable special abilities, timings for %d abilities",
-             len(units), len(timings))
+    log.info("game data: %d unit types with usable special abilities, timings for %d abilities, "
+             "stats for %d unit types", len(units), len(timings), len(stats))
     return data
 
 
 def unit_abilities() -> dict[str, list[str]]:
     """{unit type: usable special abilities}."""
     return game_data()["units"]
+
+
+def unit_stats() -> dict[str, dict]:
+    """{unit type: {men, melee, charge, defence, armour, morale, vs_cav, ammo, accuracy, walk, run, ...}}."""
+    return game_data()["stats"]
 
 
 def ability_timings() -> dict[str, dict]:
