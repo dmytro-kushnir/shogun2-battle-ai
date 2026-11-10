@@ -476,6 +476,24 @@ local AI_HANDLERS = {
 		ai_planner(o.alliance):attack_unit(target.unit)
 		ai_log_once("attack", "attack_unit ok")
 	end,
+	-- sieges: the attacking side's AI takes the castle (run 220312: attack_unit on a defender made the planner
+	-- march away from the castle, presumably looking for a way round). capture_settlement is a planner method
+	-- that no game script calls, so its arguments are unknown: none, then a position, then attack_unit.
+	ai_capture = function(o)
+		local p = ai_planner(o.alliance)
+		local ok, err = pcall(function() p:capture_settlement() end)
+		if ok then ai_log_once("capture", "capture_settlement() ok"); return end
+		local ok2, err2 = pcall(function() p:capture_settlement(vec(o.x, o.y)) end)
+		if ok2 then
+			ai_log_once("capture", "capture_settlement(v) ok (without arguments: " .. tostring(err) .. ")")
+			return
+		end
+		ai_log_once("capture", "capture_settlement refused (" .. tostring(err) .. " / " .. tostring(err2)
+			.. "), attack_unit used")
+		local target = B.units[o.target]
+		if not target then error("no target unit " .. tostring(o.target)) end
+		p:attack_unit(target.unit)
+	end,
 	ai_defend = function(o)
 		ai_planner(o.alliance):defend_position(vec(o.x, o.y), o.radius or 100)
 		ai_log_once("defend", "defend_position ok")

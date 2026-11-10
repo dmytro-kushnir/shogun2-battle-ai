@@ -204,12 +204,26 @@ def test_gameai_opponent():
               for i, a in ((10001, 1), (10002, 1), (20001, 2), (20002, 2))}
     pos = {10001: (0, 0), 10002: (40, 0), 20001: (500, 300), 20002: (60, 200)}
     state = {"t": 30.0, "tick": 60, "units": [{"id": i, "x": x, "y": y, "men": 100} for i, (x, y) in pos.items()]}
-    battle = SimpleNamespace(static=static, state=state, phase="conflict")
+    battle = SimpleNamespace(static=static, state=state, phase="conflict", buildings=None)
     opp = GameAIOpponent(2)   # we command alliance 2: the game's AI gets alliance 1
     assert opp.decide(battle) == [{"cmd": "ai_attack", "alliance": 1, "target": 20002}]
     assert opp.decide(battle) == []                  # not again before RETARGET_S
     battle.phase, state["t"] = "deployment", 2.0
     assert GameAIOpponent(2).decide(battle) == []    # nothing while deploying
+    # a siege: one order for the whole battle; the human attacks -> take the castle, defends -> hold it
+    battle.phase, state["t"] = "conflict", 30.0
+    battle.buildings = {1: {"name": "castle_02_gate_02", "mil": True, "x": 60, "y": 200, "owner": 2},
+                        2: {"name": "castle_02_wall_10_01", "mil": True, "x": 100, "y": 200, "owner": 2},
+                        3: {"name": "village_house_01", "mil": False, "x": 0, "y": 0, "owner": 0}}
+    opp = GameAIOpponent(2)
+    o = opp.decide(battle)
+    assert len(o) == 1 and o[0]["cmd"] == "ai_capture" and o[0]["alliance"] == 1 and o[0]["x"] == 80, o
+    state["t"] = 50.0
+    assert opp.decide(battle) == []
+    for b in battle.buildings.values():
+        b["owner"] = 1 if b["owner"] else 0
+    o = GameAIOpponent(2).decide(battle)
+    assert o[0]["cmd"] == "ai_defend" and o[0]["radius"] == 40, o
     nc = NoCommander(2)
     assert nc.decide(battle) == ([], []) and nc.decide(battle) is None  # releases everything once
 

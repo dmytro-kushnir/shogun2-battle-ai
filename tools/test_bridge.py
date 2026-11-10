@@ -102,7 +102,11 @@ local function make_planner(name)
             MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " (" .. #mine .. " units)->" .. t.name_
             for _, u in ipairs(mine) do u.target = t end
         end,
-        defend_position = function() end,
+        defend_position = function() MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " defend" end,
+        capture_settlement = function(_, v)
+            if v == nil then error("capture_settlement needs a position") end  -- unknown in the game: test fallback
+            MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " capture"
+        end,
     })
 end
 local alliances = list({
@@ -431,6 +435,12 @@ def main() -> bool:
                 link.poll()
                 if not any(c.startswith("planner a1 (3 units)") for c in g.MOCK_CALLS.values()):
                     problems.append(f"ai planner order did not reach the engine: {link.battle.applied[-1:]}")
+                link.send([u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2],
+                          [{"cmd": "ai_capture", "alliance": 1, "x": 80, "y": 30, "target": ai_id}])
+                tick()
+                link.poll()
+                if "planner a1 capture" not in g.MOCK_CALLS.values():
+                    problems.append(f"ai capture order did not reach the engine: {link.battle.applied[-1:]}")
 
             g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")

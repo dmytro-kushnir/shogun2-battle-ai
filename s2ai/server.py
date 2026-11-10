@@ -101,14 +101,39 @@ class NoCommander:
 
 class GameAIOpponent:
     """Research runs: the human's side is handed to the game's AI planner (the one the historical battles script),
-    so every condition fights the same opponent. Every RETARGET_S it is told to attack the commanded side's unit
-    nearest to its own centre; the game's AI does the rest (formations, flanks, missiles)."""
+    so every condition fights the same opponent. In a field battle, every RETARGET_S it is told to attack the
+    commanded side's unit nearest to its own centre; the game's AI does the rest (formations, flanks, missiles).
+    In a siege it gets one order for the whole battle: take the castle (attacker) or hold it (defender)."""
 
     RETARGET_S = 10.0
 
     def __init__(self, ai_alliance: int):
         self.ai = ai_alliance      # the side we command (the opponent is every other alliance)
         self.next_at = 0.0
+        self.siege_sent: set[int] = set()
+
+    def _siege(self, battle, units) -> list[dict] | None:
+        """Orders for a siege (None: no castle on the map). Run 220312: attack_unit on a defender sent the
+        attackers marching away from the castle."""
+        forts = [b for b in (battle.buildings or {}).values()
+                 if b.get("mil") and b.get("x") is not None
+                 and report.building_kind(b.get("name")) in ("wall", "gate", "tower")]
+        if not forts:
+            return None
+        cx, cy = sum(b["x"] for b in forts) / len(forts), sum(b["y"] for b in forts) / len(forts)
+        radius = max(math.hypot(b["x"] - cx, b["y"] - cy) for b in forts) + 20
+        orders = []
+        for al in sorted({u.alliance for u in units if u.alliance != self.ai} - self.siege_sent):
+            targets = [u for u in units if u.alliance == self.ai and u.fighting_fit]
+            if not targets:
+                continue
+            self.siege_sent.add(al)
+            if any(b.get("owner") == al for b in forts):
+                orders.append({"cmd": "ai_defend", "alliance": al, "x": cx, "y": cy, "radius": radius})
+            else:
+                t = min(targets, key=lambda e: math.hypot(e.x - cx, e.y - cy))
+                orders.append({"cmd": "ai_capture", "alliance": al, "x": cx, "y": cy, "target": t.id})
+        return orders
 
     def decide(self, battle) -> list[dict]:
         state = battle.state
@@ -118,6 +143,9 @@ class GameAIOpponent:
         units = report.merge(battle.static, state)
         if any(u.kind == "ship" for u in units):
             return []  # no planner at sea (not probed yet)
+        siege = self._siege(battle, units)
+        if siege is not None:
+            return siege
         orders = []
         for al in sorted({u.alliance for u in units if u.alliance != self.ai}):
             own = [u for u in units if u.alliance == al and u.fighting_fit]
