@@ -251,17 +251,32 @@ local HANDLERS = {
 	-- sieges: the building is fetched fresh from the garrisonable list (its id is the index there)
 	garrison = function(uc, o) uc:defend_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end,
 	climb = function(uc, o) uc:climb_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
-	-- defenders onto a wall section / tower / gate: climb_building (the game's own scripts use it to put units
-	-- on walls); if the game refuses, at least move to the piece, facing out
+	-- defenders stationed on a wall section / tower / gate. The Battle Script Documentation: occupy_zone(vector,
+	-- move_fast) "instructs units to occupy a zone near the location specified, if found. A battlefield zone is a
+	-- defensible position, like a castle wall" - the defenders' "station on the wall". (climb_building "scales"
+	-- a building: the attackers' ladders; defend_building is for enterable buildings and errors on walls.)
+	-- Fallbacks if the game refuses: climb_building, then a plain move. The first outcome of each is logged.
 	man_wall = function(uc, o)
-		local b = B.building_handle(o.building)
-		local ok, err = false, "no building " .. tostring(o.building)
-		if b then ok, err = pcall(function() uc:climb_building(b, 1, o.run ~= false) end) end
-		b = nil
+		local run = o.run ~= false
+		local ok, err = pcall(function() uc:occupy_zone(vec(o.x, o.y), run) end)
+		local how = "occupy_zone"
 		if not ok then
-			B.man_wall_fallbacks = (B.man_wall_fallbacks or 0) + 1
-			if B.man_wall_fallbacks <= 3 then log("man_wall: climb_building refused (" .. tostring(err) .. "), moving instead") end
-			uc:goto_location_angle_width(vec(o.x, o.y), o.facing or 0, 20, o.run ~= false)
+			local b = B.building_handle(o.building)
+			if b then
+				ok, err = pcall(function() uc:climb_building(b, 1, run) end)
+				how = "climb_building (occupy_zone refused: " .. tostring(err) .. ")"
+			end
+			b = nil
+		end
+		if not ok then
+			uc:goto_location_angle_width(vec(o.x, o.y), o.facing or 0, 20, run)
+			how = "move (occupy_zone and climb_building refused: " .. tostring(err) .. ")"
+		end
+		B.man_wall_logged = B.man_wall_logged or {}
+		local kind = how:match("^%S+")
+		if not B.man_wall_logged[kind] then
+			B.man_wall_logged[kind] = true
+			log("man_wall: units sent onto walls with " .. how)
 		end
 	end,
 	attack_building = function(uc, o) uc:attack_building(B.building_handle(o.building) or error("no building " .. tostring(o.building))) end,
