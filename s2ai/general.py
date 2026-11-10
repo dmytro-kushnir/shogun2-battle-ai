@@ -40,7 +40,9 @@ How to answer:
   engage_within_m 0; cavalry in reserve engage_within_m 0 until you commit it.
 - Sieges (a FORTIFICATIONS section is in the report): a position next to a wall is on the ground, NOT on the wall.
   To put a unit ON a wall section, tower or gate, use task garrison with that building's id (one unit per
-  building; pick the sections facing the enemy). Defending missile units belong on the walls facing the attack.
+  building; pick the sections facing the enemy). Any infantry unit can man a wall: missile units shoot from the
+  walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
+  enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   Attackers use climb on a wall section, attack_building on a gate, and occupy on the keep's area.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.

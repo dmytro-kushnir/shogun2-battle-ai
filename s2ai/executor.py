@@ -147,14 +147,14 @@ class Executor:
         if task == "garrison":
             b = self.buildings.get(g["building"])
             if b is not None and b.get("x") is not None and building_kind(b.get("name")) in ("wall", "tower", "gate"):
-                # Castle walls are not "defendable" buildings (run 20: defend_building refused every wall piece):
-                # a unit mans a wall section by standing on it. Move onto the piece, facing away from the castle.
+                # Castle walls are not "defendable" buildings (run 20: defend_building refused every wall piece),
+                # and a move to the piece's position leaves the unit at its foot (run 23: 4 m away, 7 m too low).
+                # man_wall makes the bridge use climb_building - what the game's own scripts use to put units on
+                # walls - and fall back to that move if the game refuses. Facing: away from the castle centre.
                 cx, cy = self._fort_centre()
                 facing = bearing(cx, cy, b["x"], b["y"])
-                if math.hypot(u.x - b["x"], u.y - b["y"]) < 6:
-                    return None  # on the wall
-                return {"cmd": "move", "unit": u.id, "x": b["x"], "y": b["y"], "facing": facing, "run": True,
-                        "_sig": f"onwall:{g['building']}"}
+                return {"cmd": "man_wall", "unit": u.id, "building": g["building"], "x": b["x"], "y": b["y"],
+                        "facing": facing, "run": True, "_sig": f"man_wall:{g['building']}"}
             if u.garrisoned:
                 return None  # inside
             return {"cmd": "garrison", "unit": u.id, "building": g["building"], "run": True,

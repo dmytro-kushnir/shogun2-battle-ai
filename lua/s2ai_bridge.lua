@@ -251,6 +251,19 @@ local HANDLERS = {
 	-- sieges: the building is fetched fresh from the garrisonable list (its id is the index there)
 	garrison = function(uc, o) uc:defend_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end,
 	climb = function(uc, o) uc:climb_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
+	-- defenders onto a wall section / tower / gate: climb_building (the game's own scripts use it to put units
+	-- on walls); if the game refuses, at least move to the piece, facing out
+	man_wall = function(uc, o)
+		local b = B.building_handle(o.building)
+		local ok, err = false, "no building " .. tostring(o.building)
+		if b then ok, err = pcall(function() uc:climb_building(b, 1, o.run ~= false) end) end
+		b = nil
+		if not ok then
+			B.man_wall_fallbacks = (B.man_wall_fallbacks or 0) + 1
+			if B.man_wall_fallbacks <= 3 then log("man_wall: climb_building refused (" .. tostring(err) .. "), moving instead") end
+			uc:goto_location_angle_width(vec(o.x, o.y), o.facing or 0, 20, o.run ~= false)
+		end
+	end,
 	attack_building = function(uc, o) uc:attack_building(B.building_handle(o.building) or error("no building " .. tostring(o.building))) end,
 	occupy = function(uc, o) uc:occupy_zone(vec(o.x, o.y), o.run ~= false) end,
 	leave_building = function(uc) uc:leave_building() end,
