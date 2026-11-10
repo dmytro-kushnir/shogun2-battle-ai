@@ -163,6 +163,8 @@ end
 -- like the engine: a destroyed unit is removed and the list closes the gap (positions of later units shift)
 function MOCK_KILL(prefix, index) table.remove(MOCK_ARMY_UNITS[prefix], index) end
 -- a reinforcement joins an army mid-battle
+-- a routing unit's centre jumps tens of metres as its men scatter (run 25)
+function MOCK_JUMP(prefix, index, dx, dz) local u = MOCK_ARMY_UNITS[prefix][index]; u.pos:set(u.pos.x + dx, 0, u.pos.z + dz) end
 function MOCK_REINFORCE(prefix, name, x, z) local u = make_unit(name, x, z); u.prefix = prefix; table.insert(MOCK_ARMY_UNITS[prefix], u) end
 
 events = { BattleDeploymentPhaseCommenced = {}, BattleConflictPhaseCommenced = {}, BattleCompleted = {},
@@ -203,9 +205,11 @@ def main() -> bool:
             for step in range(1, 81):  # 40 s
                 if step == 4:
                     g.MOCK_FIRE("BattleConflictPhaseCommenced")
-                if step == 29:  # ids before the loss, by (unique) mock type
+                if step == 19:  # ids before the jump and the loss, by (unique) mock type
                     st = link.battle.static
                     ids_before = {st[u["id"]]["type"]: u["id"] for u in link.battle.state["units"]}
+                if step == 20:
+                    g.MOCK_JUMP("player", 1, 70, -40)  # player1 routs: its centre jumps 80 m, nothing was lost
                 if step == 30:
                     g.MOCK_KILL("ai", 1)  # ai1 destroyed: ai2 and ai3 move up in the list (and get renamed)
                 if step == 35:
@@ -240,7 +244,7 @@ def main() -> bool:
             ids_after = {static[u["id"]]["type"]: u["id"] for u in link.battle.state["units"]}
             changed = {t: (ids_before[t], i) for t, i in ids_after.items() if t in ids_before and ids_before[t] != i}
             if changed:
-                problems.append(f"unit ids changed after a loss: {changed}")
+                problems.append(f"unit ids changed after a jump or a loss: {changed}")
             if "type_player3" not in {u.get("type") for u in static.values()}:
                 problems.append("the reinforcement player3 never got static info")
 
