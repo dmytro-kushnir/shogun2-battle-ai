@@ -217,6 +217,9 @@ class Executor:
 
     def _hit_and_run(self, u: U, want: dict | None, by_id: dict[int, U], enemies: list[U], t: float) -> dict | None:
         pb = self.pullback.get(u.id)
+        if pb is not None and (want is None or want.get("cmd") != "attack"):
+            del self.pullback[u.id]  # the general gave it something else to do: that wins
+            pb = None
         if pb is not None:
             x, y, until, target = pb
             tgt = by_id.get(target)
