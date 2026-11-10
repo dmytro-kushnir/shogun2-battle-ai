@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .assets import GameAssets, NoAssets
 from .link import RUNTIME
 
 PAGE = Path(__file__).with_name("viewer.html")
@@ -161,7 +162,9 @@ def lan_addresses() -> list[str]:
     return sorted(addrs)
 
 
-def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str] | None = None) -> ThreadingHTTPServer:
+def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str] | None = None,
+          assets: GameAssets | None = None) -> ThreadingHTTPServer:
+    assets = assets or NoAssets()
     # Only answer requests addressed to us by IP / localhost: a page on some other site cannot then read the map
     # through a DNS name re-pointed at this machine (DNS rebinding).
     allowed = {f"{h}:{port}" for h in ["127.0.0.1", "localhost", *(lan or [])]}
@@ -179,9 +182,14 @@ def serve(board: Board, port: int = 8765, host: str = "127.0.0.1", lan: list[str
                     body, ctype = json.dumps(battles()).encode(), "application/json"
                 elif url.path == "/replay":
                     body, ctype = replay(parse_qs(url.query).get("id", [""])[0]), "application/json"
-                elif re.fullmatch(r"/icon/[a-z0-9_]+\.png", url.path):
-                    from .gamedata import ICONS
-                    body, ctype = (ICONS / url.path[len("/icon/"):]).read_bytes(), "image/png"
+                elif url.path == "/names":
+                    body, ctype = json.dumps(assets.names()).encode(), "application/json"
+                elif m := re.fullmatch(r"/icon/(unit|card|ability)/([A-Za-z0-9_]+)\.png", url.path):
+                    kind, key = m.groups()
+                    body = assets.ability_icon(key) if kind == "ability" else assets.unit_icon(key, kind == "card")
+                    if body is None:
+                        raise FileNotFoundError(url.path)
+                    ctype = "image/png"
                 elif url.path in ("/", "/index.html"):
                     body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
                 else:

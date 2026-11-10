@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import struct
+import threading
 import zlib
 from pathlib import Path
 
@@ -45,6 +46,17 @@ ABILITIES = {
     "whistling_arrows_extreme_range_ability": "bows: whistling arrows (extreme range), friend or foe",
     "shrapnel_shot": "artillery: shells that burst above the target units for a while",
 }
+# as the game's buttons call them (for the battle map)
+ABILITY_NAMES = {"rally": "Rally", "warcry": "War Cry", "stand_firm": "Hold Firm", "banzai": "Banzai",
+                 "second_wind": "Second Wind", "rapid_advance": "Rapid Advance", "active_hiding": "Stealth",
+                 "ganbatte": "Ganbatte", "rapid_volley": "Rapid Volley", "range_effect": "Increased Range",
+                 "suppression_fire": "Suppression Fire", "flaming_arrows_ability": "Flaming Arrows",
+                 "flaming_arrows_long_range_ability": "Flaming Arrows (long range)",
+                 "flaming_arrows_extreme_range_ability": "Flaming Arrows (extreme range)",
+                 "whistling_arrows_ability": "Whistling Arrows",
+                 "whistling_arrows_long_range_ability": "Whistling Arrows (long range)",
+                 "whistling_arrows_extreme_range_ability": "Whistling Arrows (extreme range)",
+                 "shrapnel_shot": "Shrapnel Shot"}
 
 
 # ---------------------------------------------------------------- packs
@@ -286,9 +298,33 @@ def parse_entities(b: bytes) -> dict[str, dict]:
             for r in read_rows(b, ENTITY_LAYOUT)}
 
 
-CACHE_VERSION = 3
+# units version 13: key, on-screen name, ... (only the name is used); uniforms version 2: uniform, faction,
+# picture file (the unit card / icon name), unit, officer / standard bearer / musician / imposter files
+UNITS_LAYOUT = "SSSSIIIIIIOSSSOISBBBIBIOBSOOOBOIBISSB"
+UNIFORMS_LAYOUT = "SOSSOOOO"
+
+
+def parse_unit_names(b: bytes) -> dict[str, str]:
+    if _table_version(b) != 13:
+        raise ValueError(f"units version {_table_version(b)}, expected 13")
+    return {r[0]: r[1] for r in read_rows(b, UNITS_LAYOUT) if r[1]}
+
+
+def parse_uniforms(b: bytes) -> dict[str, str]:
+    """-> {unit type: picture file name}; the uniform without a faction is the default."""
+    if _table_version(b) not in (2, 3):
+        raise ValueError(f"uniforms version {_table_version(b)}, expected 2")
+    out: dict[str, str] = {}
+    for r in sorted(read_rows(b, UNIFORMS_LAYOUT), key=lambda r: r[1] != ""):
+        out.setdefault(r[3], r[2].lower())
+    return out
+
+
+CACHE_VERSION = 4
 STATS = "db\\unit_stats_land_tables\\unit_stats_land"
 ENTITIES = "db\\battle_entities_tables\\battle_entities"
+UNITS = "db\\units_tables\\units"
+UNIFORMS = "db\\uniforms_tables\\uniforms"
 
 
 def _data_packs() -> list[Path]:
@@ -311,15 +347,18 @@ def game_data() -> dict:
     timings: dict[str, dict] = {}
     stats: dict[str, dict] = {}
     entities: dict[str, dict] = {}
+    names: dict[str, str] = {}
+    pictures: dict[str, str] = {}
     for pack in reversed(packs):  # Remastered CE last: its rows win
         try:
-            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES])
+            got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES, UNITS, UNIFORMS])
         except OSError as e:
             log.warning("could not read %s: %s", pack, e)
             continue
         for name, parse, into in ((JUNCTIONS, parse_junctions, units),
                                   (TIMINGS, lambda b: parse_timings(b, ABILITIES), timings),
-                                  (STATS, parse_unit_stats, stats), (ENTITIES, parse_entities, entities)):
+                                  (STATS, parse_unit_stats, stats), (ENTITIES, parse_entities, entities),
+                                  (UNITS, parse_unit_names, names), (UNIFORMS, parse_uniforms, pictures)):
             if name in got:
                 try:
                     into.update(parse(got[name]))
@@ -329,7 +368,8 @@ def game_data() -> dict:
         st.update(entities.get(st.pop("_entity"), {}))
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
-    data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats}
+    data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats,
+            "names": names, "pictures": pictures}
     try:
         CACHE.parent.mkdir(exist_ok=True)
         CACHE.write_text(json.dumps(data), encoding="utf-8")
@@ -395,6 +435,60 @@ def tga_to_png(b: bytes) -> bytes:
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
+UNIT_ICONS = ICONS / "units"
+_unit_icons_lock = threading.Lock()
+
+
+def unit_icons() -> Path:
+    """Every unit's square icon (ui/units/icons_square) and unit card (ui/units/icons) as
+    runtime/icons/units/<picture>.png and <picture>_card.png, made once (a few seconds). -> the folder."""
+    with _unit_icons_lock:
+        UNIT_ICONS.mkdir(parents=True, exist_ok=True)
+        want = {}
+        for pic in set(game_data().get("pictures", {}).values()):
+            for folder, suffix in (("icons_square", ""), ("icons", "_card")):
+                if not (UNIT_ICONS / f"{pic}{suffix}.png").exists():
+                    want[f"ui\\units\\{folder}\\{pic}.tga"] = f"{pic}{suffix}.png"
+        for pack in _data_packs():  # Remastered CE first
+            if not want:
+                break
+            try:
+                got = read_pack_entries(pack, list(want))
+            except OSError as e:
+                log.warning("could not read unit icons from %s: %s", pack, e)
+                continue
+            for name, data in got.items():
+                try:
+                    (UNIT_ICONS / want.pop(name)).write_bytes(tga_to_png(data))
+                except (ValueError, struct.error, IndexError) as e:
+                    log.warning("unit icon %s: %s", name, e)
+        return UNIT_ICONS
+
+
+class Shogun2Assets:
+    """The battle map's pictures and names from the installed game (see assets.py)."""
+
+    def __init__(self):
+        self._made = False
+
+    def unit_icon(self, unit_type: str, card: bool = False) -> bytes | None:
+        pic = game_data().get("pictures", {}).get(unit_type)
+        if not pic:
+            return None
+        path = UNIT_ICONS / f"{pic}{'_card' if card else ''}.png"
+        if not path.exists() and not self._made:
+            self._made = True
+            unit_icons()
+        return path.read_bytes() if path.exists() else None
+
+    def ability_icon(self, ability: str) -> bytes | None:
+        path = ICONS / f"{ability}.png"
+        return path.read_bytes() if ability in ABILITIES and path.exists() else None
+
+    def names(self) -> dict[str, dict[str, str]]:
+        return {"units": game_data().get("names", {}), "abilities": ABILITY_NAMES}
+
+
 def ability_icons() -> Path:
     """The game's button icons of the usable abilities as runtime/icons/<ability>.png (made once). -> the folder."""
     ICONS.mkdir(parents=True, exist_ok=True)
@@ -427,3 +521,4 @@ if __name__ == "__main__":
         print(u, ua[u])
     print(ability_timings())
     print(sorted(p.name for p in ability_icons().glob("*.png")))
+    print(len(list(unit_icons().glob("*.png"))), "unit pictures")

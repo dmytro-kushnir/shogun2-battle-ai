@@ -39,6 +39,8 @@
   .abl .st.on { color:var(--plan); }
   .tipab { display:flex; gap:4px; align-items:center; margin-top:3px; }
   .tipab img.off { opacity:.35; filter:grayscale(1); }
+  #tip img.card { float:left; width:48px; height:auto; margin:0 8px 2px 0; border-radius:3px; }
+  #tip .tipbody { overflow:hidden; }
   .sw { display:inline-block; width:10px; height:10px; margin-right:4px; vertical-align:-1px; }
   @media (max-width:760px) { main { flex-direction:column; } aside { width:auto; max-width:none; height:48vh; border-left:0; border-top:1px solid var(--line); } }
 </style>
@@ -54,6 +56,7 @@
     <input id="slider" type="range" min="0" max="0" step="1" value="0">
     <span id="tlabel">0s</span>
   </div>
+  <button id="bPics" title="unit pictures from the game on the map (off: symbols)">Pictures</button>
   <span class="legend muted"><span><i class="sw" style="background:var(--ai)"></i>AI (Claude)</span><span><i class="sw" style="background:var(--pl)"></i>player</span><span><i class="sw" style="background:var(--plan)"></i>plan / controlled</span></span>
 </header>
 <main>
@@ -75,6 +78,25 @@
 const $ = id => document.getElementById(id);
 const c = $('c'), ctx = c.getContext('2d');
 let mode = 'live', live = null, rep = null, T = 0, playing = false, view = null, lastFrame = 0;
+
+// ------------------------------------------------------------ the game's pictures and names (optional)
+// The server answers /names and /icon/{unit,card,ability}/<key>.png when it knows the game; without them the map
+// uses its own symbols and the raw type keys.
+let NAMES = {units: {}, abilities: {}};
+fetch('/names').then(r => r.ok ? r.json() : null).then(n => { if (n) { NAMES = n; if (view) render(); } }).catch(() => {});
+let showPics = true;
+try { showPics = localStorage.getItem('s2ai.pics') !== '0'; } catch (e) {}
+const PICS = {};
+function unitPic(type) {  // -> a loaded Image, or null (not loaded yet / the game has none)
+  let im = PICS[type];
+  if (!im) {
+    im = PICS[type] = new Image();
+    im.onload = () => { if (view) render(); };
+    im.onerror = () => { im.failed = true; };
+    im.src = '/icon/unit/' + encodeURIComponent(type) + '.png';
+  }
+  return im.complete && im.naturalWidth && !im.failed ? im : null;
+}
 
 // ------------------------------------------------------------ data
 async function pollLive() {
@@ -278,18 +300,28 @@ function render() {
     ctx.fillStyle = '#fff'; ctx.fillRect(-w / 2, -d / 2, w, 2);
     if (u.ctl) { ctx.strokeStyle = col.plan; ctx.lineWidth = 1.5; ctx.strokeRect(-w / 2 - 2, -d / 2 - 2, w + 4, d + 4); }
     ctx.restore();
-    // class icon, kept upright, centred on the unit
+    // the unit's picture from the game (or its class symbol), kept upright, centred on the unit
     const cls = classify(u), fs = Math.round(Math.max(11, Math.min(18, 10 * s + 8)));
-    ctx.font = `bold ${fs}px system-ui, "Segoe UI Symbol", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.lineWidth = 3; ctx.strokeStyle = '#000a'; ctx.strokeText(cls.icon, px, py);
-    ctx.fillStyle = u.gen ? col.plan : '#fff'; ctx.fillText(cls.icon, px, py);
+    const pic = showPics ? unitPic(u.type) : null, ps = Math.round(Math.max(18, Math.min(34, 12 * s + 14)));
+    if (pic) {
+      ctx.globalAlpha = u.rout ? 0.4 : 1;
+      ctx.fillStyle = '#000'; ctx.fillRect(px - ps / 2 - 2, py - ps / 2 - 2, ps + 4, ps + 4);
+      ctx.drawImage(pic, px - ps / 2, py - ps / 2, ps, ps);
+      ctx.strokeStyle = u.gen ? col.plan : (u.ai ? col.ai : col.pl); ctx.lineWidth = 2;
+      ctx.strokeRect(px - ps / 2 - 1, py - ps / 2 - 1, ps + 2, ps + 2);
+    } else {
+      ctx.font = `bold ${fs}px system-ui, "Segoe UI Symbol", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3; ctx.strokeStyle = '#000a'; ctx.strokeText(cls.icon, px, py);
+      ctx.fillStyle = u.gen ? col.plan : '#fff'; ctx.fillText(cls.icon, px, py);
+    }
+    const half = pic ? ps / 2 + 2 : fs * .7;
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
     ctx.fillStyle = '#cfcabe'; ctx.font = '10px system-ui';
-    ctx.fillText(`${u.id % 10000} · ${u.men}`, px + Math.max(w / 2, fs * .7) + 3, py + 3);
+    ctx.fillText(`${u.id % 10000} · ${u.men}`, px + Math.max(w / 2, half) + 3, py + 3);
     // special abilities active now: the game's icon above the unit, the ring drains as the effect wears off
     const act = activeAbilities(u.id);
     act.forEach(([ab, left, dur], i) => {
-      const sz = 20, ix = px - (act.length * (sz + 3)) / 2 + i * (sz + 3), iy = py - Math.max(d, fs) / 2 - sz - 6;
+      const sz = 20, ix = px - (act.length * (sz + 3)) / 2 + i * (sz + 3), iy = py - Math.max(d, 2 * half) / 2 - sz - 6;
       const img = icon(ab);
       if (img.complete && img.naturalWidth) ctx.drawImage(img, ix, iy, sz, sz);
       else { ctx.fillStyle = col.plan; ctx.fillRect(ix, iy, sz, sz); }
@@ -305,12 +337,10 @@ function render() {
 // in the game's database (the same rule as the executor: recharge counted from activation).
 const ICONS = {};
 function icon(ab) {
-  if (!ICONS[ab]) { const im = new Image(); im.onload = () => render(); im.src = '/icon/' + encodeURIComponent(ab) + '.png'; ICONS[ab] = im; }
+  if (!ICONS[ab]) { const im = new Image(); im.onload = () => render(); im.src = '/icon/ability/' + encodeURIComponent(ab) + '.png'; ICONS[ab] = im; }
   return ICONS[ab];
 }
-const AB_NAMES = {stand_firm: 'Hold Firm', active_hiding: 'Stealth', range_effect: 'Increased Range', warcry: 'War Cry',
-  flaming_arrows_ability: 'Flaming Arrows', whistling_arrows_ability: 'Whistling Arrows', second_wind: 'Second Wind'};
-const abName = ab => AB_NAMES[ab] || ab.replace(/_ability$/, '').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+const abName = ab => NAMES.abilities[ab] || ab.replace(/_ability$/, '').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
 function abState(uid, ab) {  // -> [state, seconds]
   const tm = (view.timings || {})[ab] || {active: 30, recharge: 180, uses: -1};
   const uses = (view.abUsed || []).filter(a => a.unit === uid && a.ability === ab);
@@ -342,7 +372,7 @@ function renderAbilities() {
     const latest = (view.abUsed || []).filter(b => b.unit === a.unit && b.ability === a.ability).pop() === a;
     const txt = !latest ? 'used again later' : st === 'active' ? `active · ${left.toFixed(0)}s left` :
       st === 'recharging' ? `recharging · ${left.toFixed(0)}s` : st;
-    return `<div class="abl"><img src="/icon/${esc(a.ability)}.png" alt=""><span class="t">${a.t.toFixed(0)}s</span>` +
+    return `<div class="abl"><img src="/icon/ability/${esc(a.ability)}.png" alt=""><span class="t">${a.t.toFixed(0)}s</span>` +
       `<span><b style="color:var(--ink)">${esc(abName(a.ability))}</b> · ${esc(a.unit)} ${esc(unitType(a.unit))}</span>` +
       `<span class="st${st === 'active' && latest ? ' on' : ''}">${esc(txt)}</span></div>`;
   }).join('') : '–';
@@ -356,7 +386,7 @@ function arrow([ax, ay], [bx, by], colr) {
 }
 const getVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const pretty = t => String(t || '?').replace(/^(Genpei|Boshin|Sho|Mon|FotS|Shogun|Rok)_/, '').replace(/_/g, ' ');
+const pretty = t => NAMES.units[t] || String(t || '?').replace(/^(Genpei|Boshin|Sho|Mon|FotS|Shogun|Rok)_/, '').replace(/_/g, ' ');
 
 // unit class from the game's type key (e.g. Inf_Spear_Yari_Ashigaru, Cav_Missile_Bow_Ki, Gen_Tokugawa_Ieyasu)
 const CLASSES = [
@@ -410,10 +440,11 @@ c.addEventListener('mousemove', ev => {
   }
   const abl = (best.abl || []).map(ab => {
     const [st, left] = abState(best.id, ab);
-    return `<div class="tipab"><img class="${st === 'ready' || st === 'active' ? '' : 'off'}" src="/icon/${esc(ab)}.png" alt="">` +
+    return `<div class="tipab"><img class="${st === 'ready' || st === 'active' ? '' : 'off'}" src="/icon/ability/${esc(ab)}.png" alt="">` +
       `${esc(abName(ab))} · ${st}${left ? ' ' + left.toFixed(0) + 's' : ''}</div>`;
   }).join('');
-  tip.innerHTML = `<b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.z != null ? ' · alt ' + best.z + ' m' : ''}${best.gar ? ' · garrisoned' : ''}${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}${abl}`;
+  const card = showPics && unitPic(best.type) ? `<img class="card" src="/icon/card/${esc(best.type)}.png" alt="">` : '';
+  tip.innerHTML = card + `<div class="tipbody"><b>${best.id}</b> ${esc(pretty(best.type))}<br>${classify(best).icon} ${classify(best).name}<br>${best.ai ? 'AI' : 'player'} · ${best.men}${best.men0 ? '/' + best.men0 : ''} men · facing ${best.h}°${best.z != null ? ' · alt ' + best.z + ' m' : ''}${best.gar ? ' · garrisoned' : ''}${best.rout ? ' · ROUTING' : ''}${best.ctl ? ' · controlled' : ''}${abl}</div>`;
   tip.style.display = 'block'; tip.style.left = (mx + 14) + 'px'; tip.style.top = (my + 10) + 'px';
 });
 c.addEventListener('mouseleave', () => $('tip').style.display = 'none');
@@ -421,6 +452,12 @@ $('bLive').onclick = () => { mode = 'live'; rep = null; playing = false; $('bLiv
   $('timeline').style.display = 'none'; $('plansHead').style.display = 'none'; $('reportBox').style.display = 'none'; $('plans').innerHTML = ''; buildLive(); };
 $('pick').onchange = e => { if (e.target.value) openReplay(e.target.value); else $('bLive').onclick(); };
 $('pick').onfocus = loadBattles;
+$('bPics').classList.toggle('on', showPics);
+$('bPics').onclick = () => {
+  showPics = !showPics; $('bPics').classList.toggle('on', showPics);
+  try { localStorage.setItem('s2ai.pics', showPics ? '1' : '0'); } catch (e) {}
+  if (view) render();
+};
 $('slider').oninput = e => { T = +e.target.value; buildReplay(); };
 $('bPlay').onclick = () => { playing = !playing; $('bPlay').textContent = playing ? '❚❚' : '▶'; lastFrame = performance.now(); };
 $('plans').onclick = e => { const d = e.target.closest('[data-i]'); if (d) { T = rep.plans[+d.dataset.i].t; buildReplay(); } };
@@ -437,10 +474,18 @@ window.addEventListener('resize', render);
 $('symbols').innerHTML = CLASSES.map(([, icon, name]) =>
   `<div><b style="display:inline-block;width:26px;color:var(--ink)">${icon}</b>${name}</div>`).join('') +
   '<div style="margin-top:4px">box = unit frontage, white edge = its front</div>' +
+  '<div style="margin-top:4px">picture = the unit (button "Pictures" switches to these symbols); its frame: red AI, blue player, gold general</div>' +
   '<div style="margin-top:4px">icon above a unit = special ability active (the ring drains as it wears off); dashed line = route (via)</div>' +
   '<div style="margin-top:6px">squares = fortifications: G gate, T tower, K keep, plain = wall; ' +
   'outline = owner, filled = garrisoned, faded = damaged; grey dots = other buildings</div>';
 loadBattles(); pollLive(); requestAnimationFrame(loop);
+// ?replay=<battle>[&t=<seconds>]: open a past battle directly (a link to share or bookmark)
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get('replay')) openReplay(q.get('replay')).then(() => {
+    if (q.get('t')) { T = +q.get('t'); buildReplay(); }
+  }).catch(() => {});
+}
 </script>
 </body>
 </html>

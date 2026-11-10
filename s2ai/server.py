@@ -26,7 +26,7 @@ import webbrowser
 
 from . import report
 from .executor import Executor
-from .gamedata import ability_icons, ability_timings, unit_abilities, unit_stats
+from .gamedata import Shogun2Assets, ability_icons, ability_timings, unit_abilities, unit_icons, unit_stats
 from .link import GameLink
 from .plan import validate
 from .summary import summarize
@@ -248,7 +248,7 @@ def main() -> None:
 
     board = Board()
     lan = lan_addresses() if args.lan else []
-    serve(board, args.port, "0.0.0.0" if args.lan else "127.0.0.1", lan)
+    serve(board, args.port, "0.0.0.0" if args.lan else "127.0.0.1", lan, Shogun2Assets())
     url = f"http://127.0.0.1:{args.port}"
     log.info("battle map: %s", url)
     for ip in lan:
@@ -263,6 +263,7 @@ def main() -> None:
                                     conversation_plans=args.conversation_plans)
         log.info("general: %s", general.describe())
 
+    threading.Thread(target=unit_icons, daemon=True).start()  # unit pictures for the map, made once
     try:
         ability_icons()  # the game's ability icons for the map, extracted once into runtime/icons
     except OSError as e:
