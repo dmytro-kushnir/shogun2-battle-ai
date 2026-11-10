@@ -248,9 +248,9 @@ local HANDLERS = {
 	formation = function(uc, o) uc:change_formation(o.formation) end,
 	ability = function(uc, o) uc:perform_special_ability(o.ability) end,
 	-- sieges (argument conventions as in the game's own battle scripts)
-	garrison = function(uc, o) uc:defend_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), o.run ~= false) end,
-	climb = function(uc, o) uc:climb_building(B.buildings[o.building] or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
-	attack_building = function(uc, o) uc:attack_building(B.buildings[o.building] or error("no building " .. tostring(o.building))) end,
+	garrison = function(uc, o) uc:defend_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), o.run ~= false) end,
+	climb = function(uc, o) uc:climb_building(B.building_handle(o.building) or error("no building " .. tostring(o.building)), 1, o.run ~= false) end,
+	attack_building = function(uc, o) uc:attack_building(B.building_handle(o.building) or error("no building " .. tostring(o.building))) end,
 	occupy = function(uc, o) uc:occupy_zone(vec(o.x, o.y), o.run ~= false) end,
 	leave_building = function(uc) uc:leave_building() end,
 	shot_type = function(uc, o) uc:change_shot_type(o.shot) end,
@@ -345,17 +345,7 @@ function S2AI_Bridge_Tick()
 	if not B.battle or B.over then return end
 	local ok, err = pcall(function()
 		B.tick = B.tick + 1
-		if not B.buildings_scanned then
-			B.buildings_scanned = true
-			log("first tick: the battle timer runs")
-			local okb, buildings = pcall(scan_buildings)
-			if okb then
-				emit({ type = "buildings", buildings = buildings })
-			else
-				log("BUILDINGS ERROR: " .. tostring(buildings))
-				B.buildings, B.forts = {}, {}
-			end
-		end
+		if B.tick == 1 then log("first tick: the battle timer runs") end
 		local known = B.units or {}
 		scan()
 		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
@@ -430,62 +420,64 @@ local function owner_alliance(b)
 	return (o and o >= 0) and (o + 1) or 0 -- 1-based like units' alliances; 0 = nobody
 end
 
--- Not every item of battle:buildings() is a building: run 14 got a function back from alliance_owner_id past
--- the first items, and the battle's script timer never fired afterwards. Calling an engine method on an object
--- of another class can make the C++ side misread it, so an item is only touched when its metatable IS the
--- registered battle.building class.
-local function building_class()
-	local ok, reg = pcall(debug.getregistry)
-	return ok and type(reg) == "table" and reg["battle.building"] or nil
+-- What the game showed so far (runs 13-17):
+--   OK:     discovery - at battle LOAD, the first 200 items, every handle read and dropped (nothing kept)
+--   broken: keeping the handles of all 368 items (at load: run 14; on the first tick: run 17) - handles past
+--           the ~23rd came back as garbage and the battle-script timer died
+-- So, step 1 of sieges reproduces the discovery conditions exactly: once, at load, at most SCAN_LIMIT items,
+-- plain data copied out, no handle kept. Each handle's class is recognised without calling anything: its
+-- metatable carries the building methods itself (run 16 showed it is not the registry's class table).
+local SCAN_LIMIT = 200
+
+local function looks_like_building(b)
+	local mt = type(b) == "userdata" and getmetatable(b) or nil
+	return type(mt) == "table" and type(rawget(mt, "central_position")) == "function"
+		and type(rawget(mt, "capacity")) == "function" and type(rawget(mt, "alliance_owner_id")) == "function"
+		and type(rawget(mt, "is_garrisoned")) == "function"
 end
 
 function scan_buildings() -- assigns the local declared at the top
-	B.buildings, B.forts = {}, {}
-	local cls = building_class()
-	if not cls then
-		log("buildings: battle.building class not found in the registry - no fortification data")
-		return {}
-	end
+	B.forts = {}
 	local list = call(B.battle, "buildings")
 	local n = list and num(call(list, "count")) or 0
 	local out, skipped = {}, 0
-	for i = 1, math.min(n, 1000) do
+	for i = 1, math.min(n, SCAN_LIMIT) do
 		local b = call(list, "item", i)
-		local mt = type(b) == "userdata" and getmetatable(b) or nil
-		-- the class table is either the object's metatable itself or what that metatable's __index points at
-		-- (run 15: none matched the first form)
-		local is_building = mt ~= nil and (mt == cls or (type(mt) == "table" and rawget(mt, "__index") == cls))
-		if not is_building then
+		if not looks_like_building(b) then
 			skipped = skipped + 1
-			if skipped == 1 then
-				log(string.format("buildings: item %d skipped: type=%s mt=%s mt.__index=%s class=%s", i, type(b),
-					tostring(mt), tostring(type(mt) == "table" and rawget(mt, "__index") or nil), tostring(cls)))
-			end
 		else
+			local name = call(b, "name")
+			if type(name) ~= "string" then
+				log(string.format("buildings: item %d gave a %s name - scan stopped", i, type(name)))
+				break
+			end
 			local p = call(b, "position")
-			local name, cap, owner = call(b, "name"), num(call(b, "capacity")), owner_alliance(b)
-			name = type(name) == "string" and name or "?"
+			local cap, owner = num(call(b, "capacity")), owner_alliance(b)
 			local mil = is_military(name, cap, owner - 1)
-			B.buildings[i] = b
 			if mil then B.forts[#B.forts + 1] = i end
 			out[#out + 1] = { id = i, name = name, x = p and num(call(p, "get_x")), y = p and num(call(p, "get_z")),
 				z = p and num(call(p, "get_y")), cap = cap, owner = owner, hp = num(call(b, "health")), mil = mil }
 		end
 	end
-	log(string.format("buildings: %d listed, %d read (%d fortifications), %d skipped (not battle.building)",
-		n, #out, #B.forts, skipped))
+	-- is the engine still answering normally after the scan? (in run 17 alliances:count() stopped being a number)
+	local check = num(call(call(B.battle, "alliances"), "count"))
+	log(string.format("buildings: %d listed, %d read (limit %d), %d fortifications, %d skipped; engine check: %s",
+		n, #out, SCAN_LIMIT, #B.forts, skipped, check and ("ok, " .. check .. " alliances") or "FAILED"))
 	return out
 end
 
--- changing state of the fortifications only (a few dozen buildings): [id, health, owner, garrisoned]
+-- Step 1: no periodic building updates (they would touch handles every few seconds); comes in a later step.
 function building_states() -- assigns the local declared at the top
-	local out = {}
-	for _, i in ipairs(B.forts or {}) do
-		local b = B.buildings[i]
-		out[#out + 1] = { i, call(b, "health"), owner_alliance(b), call(b, "currently_garrisoned") and 1 or 0 }
-	end
-	return out
+	return nil
 end
+
+-- a fresh handle for a siege order, used at once and dropped
+local function building_handle(i)
+	local list = call(B.battle, "buildings")
+	local b = list and call(list, "item", i) or nil
+	return looks_like_building(b) and b or nil
+end
+B.building_handle = building_handle
 
 -- ------------------------------------------------------------------ start
 
@@ -511,7 +503,14 @@ local function start()
 	local units = {}
 	for _, id in ipairs(sorted_ids()) do units[#units + 1] = static_record(id, B.units[id]) end
 	emit({ type = "battle_start", version = 1, tick_ms = TICK_MS, armies = armies, units = units })
-	B.buildings, B.forts, B.buildings_scanned = {}, {}, false -- read on the first tick, once the timer runs
+	-- buildings: once, here at load, before the timer (the discovery run's conditions)
+	local okb, buildings = pcall(scan_buildings)
+	if okb then
+		emit({ type = "buildings", buildings = buildings })
+	else
+		log("BUILDINGS ERROR: " .. tostring(buildings))
+		B.forts = {}
+	end
 	pcall(function()
 		local f = io.open(RUN .. "/current_battle.txt", "w")
 		f:write(B.id)

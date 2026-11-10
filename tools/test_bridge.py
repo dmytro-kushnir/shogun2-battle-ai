@@ -99,9 +99,15 @@ local METHODS = {
     health = function() return 1 end, currently_garrisoned = function() return false end,
     destroy = function() error("the bridge must never call destroy") end,
 }
-local BASE = newproxy(true)                 -- every building shares this metatable, like the engine's class
-getmetatable(BASE).__index = METHODS
-debug.getregistry()["battle.building"] = getmetatable(BASE)
+-- like the game (run 16): the methods sit directly in the object's metatable (which also serves as __index),
+-- and that metatable is NOT the registry's class table
+local BASE = newproxy(true)
+local BMT = getmetatable(BASE)
+for k, f in pairs(METHODS) do BMT[k] = f end
+BMT.central_position = METHODS.position
+BMT.is_garrisoned = METHODS.currently_garrisoned
+BMT.__index = BMT
+debug.getregistry()["battle.building"] = { note = "a different table, as in the game" }
 local function make_building(name, x, z, cap, owner)
     local b = newproxy(BASE)
     FIELDS[b] = { name_ = name, pos = battle_vector:new(), cap = cap, owner = owner }
