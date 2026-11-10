@@ -75,7 +75,7 @@ mod's code from this folder (if you move it, run `install.ps1` again).
 Options: `--model opus` (stronger, slower), `--effort medium`, `--ai-alliance 1` (if the server picks the wrong
 side; it guesses from the armies' difficulty handicap), `--commander demo` (no model: every AI unit charges the
 nearest enemy), `--lan` (let other devices on your network open the map; read-only and without a password, so only
-on a network you trust).
+on a network you trust), `--port 8765` (the map's port), `--no-browser` (do not open the map at start).
 
 Fewer tokens: `--model haiku` (cheapest, weaker), `--far-plan-s 20` (plan at most every 20 s while the armies are
 over 300 m apart; default 15), `--min-plan-s 8` (never plan more often than that), `--conversation-plans 4` (start
@@ -158,6 +158,7 @@ patch only ever lives in the game's memory and ends when the game exits.
 ```powershell
 .\.venv\Scripts\python tools\check_lua.py        # Lua 5.1 compile check + main-menu hook in a sandbox
 .\.venv\Scripts\python tools\test_bridge.py      # bridge + server end to end against a mock battle, no game
+.\.venv\Scripts\python tools\test_logic.py       # executor, plan checks, usage-limit parsing, no game
 .\.venv\Scripts\python tools\check_installed.py  # the installed loaders compile and never raise
 .\.venv\Scripts\python tools\try_general.py runtime\battle-<id>.jsonl --at 60   # one real plan on a recorded battle
 .\.venv\Scripts\python tools\try_general.py runtime\battle-<id>.jsonl --at 60 --report-only   # just the report

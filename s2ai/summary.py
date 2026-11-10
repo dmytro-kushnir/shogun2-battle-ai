@@ -45,7 +45,11 @@ def summarize(bid: str, runtime: Path = RUNTIME, extra: dict | None = None) -> d
         if m.get("type") in ("battle_start", "units"):
             for u in m.get("units", []):
                 static.setdefault(u["id"], u)
-    ai = meta.get("ai") or 2
+    ai = meta.get("ai")
+    if not ai:
+        from .server import guess_ai_alliance
+        start = next((m for m in msgs if m.get("type") == "battle_start"), None)
+        ai = guess_ai_alliance(start) if start else 2
     last = states[-1]
     end = {u["id"]: u for u in last["units"]}
     first_men: dict[int, int] = {}
@@ -144,6 +148,9 @@ def main() -> None:
     print("|" + "---|" * len(COLUMNS))
     for r in rows:
         print("| " + " | ".join(cell(r, k) for k, _ in COLUMNS) + " |")
+    if not rows:
+        print(f"no recorded battles in {RUNTIME}")
+        return
     with (RUNTIME / "battles.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow([k for k, _ in COLUMNS])

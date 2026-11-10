@@ -103,11 +103,11 @@ class Executor:
         if not used:
             return "ready", 0.0
         tm = self.timings.get(ability, DEFAULT_TIMING)
-        if tm.get("uses", -1) > 0 and len(used) >= tm["uses"]:
-            return "used up", 0.0
         age = t - used[-1]
         if age < tm["active"]:
             return "active", tm["active"] - age
+        if tm.get("uses", -1) > 0 and len(used) >= tm["uses"]:
+            return "used up", 0.0
         if age < tm["recharge"]:
             return "recharging", tm["recharge"] - age
         return "ready", 0.0
@@ -260,20 +260,25 @@ class Executor:
         target = by_id.get(want["target"])
         if target is None:
             return want
-        d = dist(u, target)
+        # The melee is with whoever the cavalry is in contact with, which need not be its target: battle 141245,
+        # cavalry sent at a gun was caught by the Kyoto Police guarding it (16 m off, the gun 60 m) and lost 35 men
+        # in 44 s without ever pulling back, because only the distance to the gun was checked.
+        # So the melee runs while it touches any enemy, and is judged by the worst of them (spears first).
+        contact = [e for e in enemies if dist(u, e) <= CAV_CONTACT_M]
         m = self.melee.get(u.id)
-        if d > CAV_CONTACT_M:
-            if m is not None and d > CAV_CONTACT_M * 2:  # centres jitter in a melee: only a clear gap ends it
-                del self.melee[u.id]
+        if not contact:
+            if m is not None and not any(dist(u, e) <= CAV_CONTACT_M * 2 for e in enemies):
+                del self.melee[u.id]  # centres jitter in a melee: only a clear gap ends it
             return want
-        if m is None or m[2] != target.id:
-            self.melee[u.id] = (t, u.men, target.id)
+        foe = max(contact, key=lambda e: (self.stats.get(e.type, {}).get("vs_cav", 0), e.id == target.id))
+        if m is None:
+            self.melee[u.id] = (t, u.men, foe.id)
             return want
         since, men_then, _ = m
-        st = self.stats.get(target.type, {})
+        st = self.stats.get(foe.type, {})
         lost = (men_then - u.men) / men_then if men_then else 0.0
         hold = CAV_MELEE_SPEARS_S if st.get("vs_cav", 0) > 0 else CAV_MELEE_S
-        if lost < CAV_LOSS_PULL and (target.kind == "art" or (target.men0 and target.men < target.men0 * CAV_STAY_BELOW)
+        if lost < CAV_LOSS_PULL and (foe.kind == "art" or (foe.men0 and foe.men < foe.men0 * CAV_STAY_BELOW)
                                      or t - since < hold):
             return want
         # pull back away from the enemies around it, then charge again
@@ -282,7 +287,7 @@ class Executor:
         away = math.radians(bearing(cx, cy, u.x, u.y))
         x, y = u.x + math.sin(away) * CAV_PULLBACK_M, u.y + math.cos(away) * CAV_PULLBACK_M
         self.pullback[u.id] = (x, y, t + CAV_PULLBACK_S, target.id)
-        self.pullbacks.append({"t": t, "unit": u.id, "target": target.id})
+        self.pullbacks.append({"t": t, "unit": u.id, "target": target.id, "foe": foe.id})
         self.melee.pop(u.id, None)
         return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": bearing(x, y, target.x, target.y),
                 "run": True, "_sig": f"pullback:{round(x / 10)}:{round(y / 10)}"}

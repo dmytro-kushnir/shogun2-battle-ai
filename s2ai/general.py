@@ -38,10 +38,14 @@ class UsageLimit(RuntimeError):
         self.resume_at = resume_at
 
 
-LIMIT_RE = re.compile(r"(?i)hit your .{0,30}limit|usage limit")
-RESET_RE = re.compile(r"(?i)resets\s+(?:(?:at|on)\s+)?(?:(?P<mon>[a-z]{3})[a-z]*\.?\s+(?P<day>\d{1,2}),?\s+(?:at\s+)?)?"
+LIMIT_RE = re.compile(r"(?i)hit your .{0,30}limit|usage limit|limit reached")
+# "resets 12:10pm (Europe/Kyiv)", "resets Nov 14, 3pm", "resets Mon 9am", "will reset at 3pm"
+RESET_RE = re.compile(r"(?i)resets?\s+(?:(?:at|on)\s+)?"
+                      r"(?:(?P<wd>mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+(?:at\s+)?)?"
+                      r"(?:(?P<mon>[a-z]{3})[a-z]*\.?\s+(?P<day>\d{1,2}),?\s+(?:at\s+)?)?"
                       r"(?P<h>\d{1,2})(?::(?P<m>\d\d))?\s*(?P<ap>am|pm)?(?:\s*\((?P<tz>[^)]+)\))?")
 MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+WEEKDAYS = "mon tue wed thu fri sat sun".split()
 
 
 def limit_reset(text: str, now: float | None = None) -> float | None:
@@ -57,7 +61,7 @@ def limit_reset(text: str, now: float | None = None) -> float | None:
     if not m:
         return now + LIMIT_FALLBACK_S
     tz = None
-    if m["tz"]:
+    if m["tz"]:  # the CLI prints the user's own zone; without a tz database (Windows) local time is used
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(m["tz"].strip())
@@ -69,15 +73,20 @@ def limit_reset(text: str, now: float | None = None) -> float | None:
         h = h % 12 + (12 if m["ap"].lower() == "pm" else 0)
     if h > 23 or mi > 59:
         return now + LIMIT_FALLBACK_S
-    if m["mon"] and m["mon"].lower()[:3] in MONTHS:
-        when = base.replace(month=MONTHS.index(m["mon"].lower()[:3]) + 1, day=int(m["day"]), hour=h, minute=mi,
-                            second=0, microsecond=0)
-        if when.timestamp() < now - 86400:
-            when = when.replace(year=when.year + 1)
-    else:
-        when = base.replace(hour=h, minute=mi, second=0, microsecond=0)
-        if when.timestamp() <= now:
-            when += dt.timedelta(days=1)
+    try:
+        if m["mon"] and m["mon"].lower()[:3] in MONTHS:
+            when = base.replace(month=MONTHS.index(m["mon"].lower()[:3]) + 1, day=int(m["day"]), hour=h, minute=mi,
+                                second=0, microsecond=0)
+            if when.timestamp() < now - 86400:
+                when = when.replace(year=when.year + 1)
+        else:
+            when = base.replace(hour=h, minute=mi, second=0, microsecond=0)
+            if m["wd"]:
+                when += dt.timedelta(days=(WEEKDAYS.index(m["wd"].lower()[:3]) - when.weekday()) % 7)
+            if when.timestamp() <= now:
+                when += dt.timedelta(days=7 if m["wd"] else 1)
+    except ValueError:  # "Feb 30" and the like
+        return now + LIMIT_FALLBACK_S
     return when.timestamp() + 60
 
 INSTRUCTIONS = """You are the commanding general of one army in a Total War: SHOGUN 2 battle, fighting against a
@@ -232,7 +241,13 @@ class ClaudeCodeGeneral:
             raise RuntimeError(f"claude: {text}")
         data = ev.get("structured_output")
         if data is None:
-            text = ev.get("result", "")
+            text = str(ev.get("result") or "")
+            if "{" not in text:  # no plan at all: maybe the usage limit, reported as an ordinary answer
+                resume = limit_reset(text)
+                if resume is not None:
+                    self.close()
+                    raise UsageLimit(f"claude: {text}", resume)
+                raise RuntimeError(f"claude answered without a plan: {text[:200]}")
             data = json.loads(text[text.find("{"): text.rfind("}") + 1])
         u = ev.get("usage") or {}
         cost = ev.get("total_cost_usd") or 0.0

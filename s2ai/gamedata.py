@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import struct
 import threading
 import zlib
@@ -332,17 +333,42 @@ def _data_packs() -> list[Path]:
     return sorted((d / "data.pack" for d in data_dirs()), key=lambda p: "remasteredce" not in str(p).lower())
 
 
+_game_data_lock = threading.Lock()
+_game_data: dict | None = None
+_game_data_checked = 0.0
+GAME_DATA_RECHECK_S = 60.0  # how often to look whether the packs changed (a game update)
+
+
 def game_data() -> dict:
     """{"units": {unit type: usable abilities}, "timings": {ability: {active, recharge, uses}},
-    "stats": {unit type: stats}} from the installed game (cached in runtime/). Empty if the game is not found."""
-    packs = _data_packs()
-    stamp = [[str(p), p.stat().st_mtime] for p in packs]
-    try:
-        cached = json.loads(CACHE.read_text(encoding="utf-8"))
-        if cached.get("packs") == stamp and cached.get("v") == CACHE_VERSION:
-            return cached
-    except (OSError, ValueError, KeyError):
-        pass
+    "stats": {unit type: stats}, "names": {unit type: name}, "pictures": {unit type: picture}} from the installed
+    game, kept in memory and cached in runtime/. Empty parts if the game is not found or its packs cannot be read."""
+    global _game_data, _game_data_checked
+    import time
+    with _game_data_lock:
+        if _game_data is not None and time.monotonic() - _game_data_checked < GAME_DATA_RECHECK_S:
+            return _game_data
+        _game_data_checked = time.monotonic()
+        try:
+            packs = _data_packs()
+            stamp = [[str(p), p.stat().st_mtime] for p in packs]
+        except OSError as e:
+            log.warning("could not find the game's packs: %s", e)
+            packs, stamp = [], []
+        if _game_data is not None and _game_data.get("packs") == stamp:
+            return _game_data
+        try:
+            cached = json.loads(CACHE.read_text(encoding="utf-8"))
+            if cached.get("packs") == stamp and cached.get("v") == CACHE_VERSION:
+                _game_data = cached
+                return cached
+        except (OSError, ValueError, KeyError):
+            pass
+        _game_data = _read_game_data(packs, stamp)
+        return _game_data
+
+
+def _read_game_data(packs: list[Path], stamp: list) -> dict:
     units: dict[str, list[str]] = {}
     timings: dict[str, dict] = {}
     stats: dict[str, dict] = {}
@@ -352,7 +378,7 @@ def game_data() -> dict:
     for pack in reversed(packs):  # Remastered CE last: its rows win
         try:
             got = read_pack_entries(pack, [JUNCTIONS, TIMINGS, STATS, ENTITIES, UNITS, UNIFORMS])
-        except OSError as e:
+        except (OSError, ValueError, struct.error, IndexError) as e:  # missing, or a format this does not know
             log.warning("could not read %s: %s", pack, e)
             continue
         for name, parse, into in ((JUNCTIONS, parse_junctions, units),
@@ -362,17 +388,19 @@ def game_data() -> dict:
             if name in got:
                 try:
                     into.update(parse(got[name]))
-                except (ValueError, struct.error) as e:
+                except (ValueError, struct.error, IndexError, KeyError) as e:
                     log.warning("could not read %s from %s: %s", name.rsplit("\\", 1)[-1], pack, e)
     for st in stats.values():  # speeds come from the man's entity, or the horse's for cavalry
-        st.update(entities.get(st.pop("_entity"), {}))
+        st.update(entities.get(st.pop("_entity", None), {}))
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
     data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats,
             "names": names, "pictures": pictures}
     try:
         CACHE.parent.mkdir(exist_ok=True)
-        CACHE.write_text(json.dumps(data), encoding="utf-8")
+        tmp = CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, CACHE)
     except OSError:
         pass
     log.info("game data: %d unit types with usable special abilities, timings for %d abilities, "
