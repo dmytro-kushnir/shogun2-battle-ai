@@ -93,7 +93,9 @@ needed to rerun.
 
 - [x] Bridge and server for land, siege and naval battles; per-battle recordings and summaries
 - [x] `--opponent gameai`, `--commander none`, `--condition`; commit and settings stamped per battle
-- [ ] **Probe:** does the game's AI planner fight the human's side in a custom battle? (next game test)
+- [x] Probe (battle 214912, 13 vs 34 units, Boshin): the human's side, handed to the game's AI planner, advanced
+      and fought on its own (`attack_unit ok`; planner methods: add_units attack_unit capture_settlement
+      clear_objective defend_position remove_units). Land only; naval not probed.
 - [ ] Reliable battle result (most streams end without `battle_end`)
 - [ ] Ablation switches (reflexes off, no game data)
 - [ ] Scenario files fixed and described
