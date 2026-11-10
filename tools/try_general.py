@@ -14,7 +14,9 @@ sys.path.insert(0, str(REPO))
 
 from s2ai import report  # noqa: E402
 from s2ai.executor import Executor  # noqa: E402
+from s2ai.gamedata import unit_abilities  # noqa: E402
 from s2ai.general import ClaudeCodeGeneral  # noqa: E402
+from s2ai.link import GameLink  # noqa: E402
 from s2ai.plan import validate  # noqa: E402
 from s2ai.server import guess_ai_alliance  # noqa: E402
 
@@ -26,27 +28,32 @@ ap.add_argument("--model", default="sonnet")
 ap.add_argument("--effort", default="low")
 args = ap.parse_args()
 
-msgs = [json.loads(line) for line in pathlib.Path(args.stream).read_text().splitlines() if line.strip()]
-start = next(m for m in msgs if m["type"] == "battle_start")
-states = [m for m in msgs if m["type"] == "state"]
-state = min(states, key=lambda s: abs(s["t"] - args.at))
-events = [m for m in msgs if m["type"] == "event" and m.get("tick", 0) * 0.5 <= state["t"]]
+# replay the stream up to --at through the same link the server uses (terrain, morale history, buildings)
+link = GameLink.__new__(GameLink)
+link.runtime, link.battle = pathlib.Path(args.stream).parent, None
+bid = pathlib.Path(args.stream).stem[len("battle-"):]
+start = None
+for line in pathlib.Path(args.stream).read_text().splitlines():
+    if not line.strip():
+        continue
+    m = json.loads(line)
+    start = start or (m if m["type"] == "battle_start" else None)
+    link._absorb(bid, m)
+    if m["type"] == "state" and m["t"] >= args.at:
+        break
+b = link.battle
 ai = args.ai or guess_ai_alliance(start)
-static = {u["id"]: u for u in start["units"]}
-for m in msgs:
-    if m["type"] == "units":
-        static.update({u["id"]: u for u in m["units"]})
-
-buildings = report.buildings_from_message(next((m for m in msgs if m["type"] == "buildings"), None))
-
-text, units = report.build(static, state, ai, events, None, None, buildings)
+abilities = unit_abilities()
+text, units = report.build(b.static, b.state, ai, b.events, None, None, b.buildings, b.terrain, b.morale, abilities)
 print(text)
 print("\n" + "=" * 100)
 general = ClaudeCodeGeneral(model=args.model, effort=args.effort)
 raw, info = general.plan(text)
 general.close()
 plan, problems = validate(raw, {u.id for u in units if u.alliance == ai}, {u.id for u in units if u.alliance != ai},
-                          {f["id"] for f in report.fortifications(buildings)})
+                          {f["id"] for f in report.fortifications(b.buildings)},
+                          {u.id: abilities.get(u.type, []) for u in units if u.alliance == ai})
+state = b.state
 print(f"PLAN in {info['seconds']}s, {info['tokens_in']} in / {info['tokens_out']} out tokens, ~${info['api_equiv_usd']:.3f} API-equivalent")
 print(json.dumps(plan, indent=1))
 for p in problems:

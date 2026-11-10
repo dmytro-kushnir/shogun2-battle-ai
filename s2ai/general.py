@@ -44,6 +44,10 @@ How to answer:
   walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   Attackers use climb on a wall section, attack_building on a gate, and occupy on the keep's area.
+- Special abilities: units that have them show "abilities: ..." in the report. Put one in `abilities` to use it
+  now, once; leave `abilities` empty otherwise (most plans). Each has a cooldown, so use it at the moment it
+  matters: rally when units nearby waver or rout, warcry / banzai / rapid_advance right before a charge
+  lands, stand_firm for a line about to break, rapid_volley when the enemy is in range, second_wind for tired units.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

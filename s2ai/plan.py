@@ -8,7 +8,7 @@ BUILDING_TASKS = {"garrison", "climb", "attack_building"}
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["intent", "reasoning", "groups", "next_plan_in_s"],
+    "required": ["intent", "reasoning", "groups", "abilities", "next_plan_in_s"],
     "properties": {
         "intent": {"type": "string", "description": "One short sentence: what the army does now (shown in game)."},
         "reasoning": {"type": "string", "description": "Brief: what you see and why this plan (2-4 sentences)."},
@@ -48,14 +48,26 @@ PLAN_SCHEMA = {
                 },
             },
         },
+        "abilities": {
+            "type": "array",
+            "description": "Special abilities to use NOW, once (usually empty). Only abilities listed for that unit.",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["unit", "ability"],
+                "properties": {"unit": {"type": "integer", "description": "id of YOUR unit"},
+                               "ability": {"type": "string", "description": "e.g. 'rally'"}},
+            },
+        },
         "next_plan_in_s": {"type": "integer", "description": "When to look again (4-30 s); sooner if things change."},
     },
 }
 
 
 def validate(plan: dict, ours: set[int], enemies: set[int],
-             buildings: set[int] | None = None) -> tuple[dict, list[str]]:
-    """Keep what can be carried out; return (clean plan, problems)."""
+             buildings: set[int] | None = None,
+             unit_abilities: dict[int, list[str]] | None = None) -> tuple[dict, list[str]]:
+    """Keep what can be carried out; return (clean plan, problems). unit_abilities: {our unit id: abilities}."""
     problems: list[str] = []
     groups = []
     seen: set[int] = set()
@@ -105,10 +117,23 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
             "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
             "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),
         })
+    abilities = []
+    raw_ab = plan.get("abilities")
+    for a in raw_ab if isinstance(raw_ab, list) else []:
+        if not isinstance(a, dict):
+            continue
+        uid, name = _int(a.get("unit")), str(a.get("ability") or "")
+        if uid not in ours:
+            problems.append(f"ability {name}: {a.get('unit')} is not one of your units")
+        elif name not in (unit_abilities or {}).get(uid, []):
+            problems.append(f"ability {name}: unit {uid} does not have it")
+        elif not any(x["unit"] == uid for x in abilities):  # one per unit per plan
+            abilities.append({"unit": uid, "ability": name})
     clean = {
         "intent": str(plan.get("intent", ""))[:160],
         "reasoning": str(plan.get("reasoning", ""))[:2000],
         "groups": groups,
+        "abilities": abilities,
         "next_plan_in_s": int(min(30, max(4, _num(plan.get("next_plan_in_s")) or 8))),
     }
     return clean, problems

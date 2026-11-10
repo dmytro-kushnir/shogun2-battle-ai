@@ -12,6 +12,7 @@ from .report import U, bearing, building_kind, dist
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 SPACING_EXTRA_M = 6.0   # gap between units in a line
 DEFAULT_WIDTH_M = 30.0
+ABILITY_REPEAT_S = 15.0
 
 
 def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float]) -> list[tuple[float, float]]:
@@ -39,6 +40,8 @@ class Executor:
         self.engaged: dict[int, int] = {}                      # unit -> enemy it is engaging by reflex
         self.last_orders: list[dict] = []
         self.buildings: dict[int, dict] = {}                   # id -> building (from the bridge), for sieges
+        self.pending_abilities: list[dict] = []                # from the latest plan, sent on the next tick
+        self.ability_used: dict[tuple[int, str], float] = {}   # (unit, ability) -> battle time last sent
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -46,6 +49,7 @@ class Executor:
     def set_plan(self, plan: dict, units: list[U], t: float) -> None:
         self.plan, self.plan_t = plan, t
         self.slots = {}
+        self.pending_abilities = list(plan.get("abilities") or [])
         by_id = {u.id: u for u in units}
         enemies = [u for u in units if u.alliance != self.ai and u.fighting_fit]
         ecx = sum(e.x for e in enemies) / len(enemies) if enemies else 0.0
@@ -101,6 +105,15 @@ class Executor:
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
+        # special abilities: once per plan, after the unit's movement order; a plan that repeats one within
+        # ABILITY_REPEAT_S (the general often re-sends its last plan) does not fire it again
+        fit = {u.id for u in ours}
+        for a in self.pending_abilities:
+            key = (a["unit"], a["ability"])
+            if a["unit"] in fit and t - self.ability_used.get(key, -1e9) > ABILITY_REPEAT_S:
+                self.ability_used[key] = t
+                orders.append({"cmd": "ability", "unit": a["unit"], "ability": a["ability"]})
+        self.pending_abilities = []
         self.last_orders = orders
         return take, orders
 

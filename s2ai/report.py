@@ -36,6 +36,7 @@ class U:
     range: float
     z: float = 0.0          # altitude, metres
     garrisoned: bool = False
+    ability: str = ""       # special ability active right now ("" = none)
 
     @property
     def alive(self) -> bool:
@@ -73,6 +74,7 @@ def merge(static: dict[int, dict], state: dict) -> list[U]:
             routing=bool(s.get("rout")), shattered=bool(s.get("shat")), gone=bool(s.get("gone")),
             ammo=s.get("ammo"), range=st.get("range") or 0.0,
             z=s.get("z") or 0.0, garrisoned=bool(s.get("gar")),
+            ability="" if str(s.get("ab") or "none").lower() in ("none", "") else str(s.get("ab")),
         ))
     return units
 
@@ -196,8 +198,15 @@ def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> st
 
 def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], plan: dict | None,
           plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None,
-          morale=None) -> tuple[str, list[U]]:
+          morale=None, abilities: dict[str, list[str]] | None = None) -> tuple[str, list[U]]:
+    """abilities: {unit type: usable special abilities} (gamedata.unit_abilities)."""
     units = merge(static, state)
+    abilities = abilities or {}
+
+    def ab_tag(u: U) -> str:
+        have = abilities.get(u.type) if u.fighting_fit else None
+        txt = f" | abilities: {', '.join(have)}" if have else ""
+        return txt + (f" | USING {u.ability}" if u.ability else "")
     from .morale import tag  # morale.py builds on this module
     risk = morale.assess(units) if morale is not None else {}
     mtag = lambda u: tag(risk, u.id)
@@ -221,11 +230,17 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append("")
     out.append("YOUR UNITS (id, type, kind, men, position, altitude, facing, state):")
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
-        out.append(unit_line(u, fit_theirs, show_nearest=True, extra=mtag(u)))
+        out.append(unit_line(u, fit_theirs, show_nearest=True, extra=mtag(u) + ab_tag(u)))
+    ours_ab = sorted({a for u in ours if u.fighting_fit for a in abilities.get(u.type, [])})
+    if ours_ab:
+        from .gamedata import ABILITIES
+        out.append("  Special abilities (use with `abilities` in the plan; each has a cooldown):")
+        out.extend(f"    {a}: {ABILITIES.get(a, '')}" for a in ours_ab)
     out.append("")
     out.append("ENEMY UNITS (closest to your army first):")
     for e in sorted(theirs, key=lambda e: math.hypot(e.x - ox, e.y - oy)):
-        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False, extra=mtag(e)))
+        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False,
+                             extra=mtag(e) + (f" | USING {e.ability}" if e.ability else "")))
     if morale is not None:
         out.append("")
         out.append("(morale risk: an estimate from losses, flanks, local numbers, the general and routing friends - "

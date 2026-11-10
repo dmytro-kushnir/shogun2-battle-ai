@@ -21,6 +21,7 @@ import webbrowser
 
 from . import report
 from .executor import Executor
+from .gamedata import unit_abilities
 from .link import GameLink
 from .plan import validate
 from .viewer import Board, lan_addresses, serve
@@ -85,6 +86,7 @@ class GeneralCommander:
         self.plan_t = 0.0
         self.plans = 0
         self.plan_log = link.runtime / f"plans-{battle_id}.jsonl"
+        self.abilities = unit_abilities()  # {unit type: special abilities}, from the game's database (cached)
 
     def decide(self, battle) -> tuple[list[int], list[dict]] | None:
         state = battle.state
@@ -108,7 +110,7 @@ class GeneralCommander:
 
     def _ask(self, battle, units, t) -> None:
         text, _ = report.build(battle.static, battle.state, self.ai, battle.events, self.executor.plan,
-                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain, battle.morale)
+                               t - self.plan_t if self.executor.plan else None, battle.buildings, battle.terrain, battle.morale, self.abilities)
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -130,7 +132,8 @@ class GeneralCommander:
         ours = {u.id for u in units if u.alliance == self.ai}
         enemies = {u.id for u in units if u.alliance != self.ai}
         forts = {f["id"] for f in report.fortifications(battle.buildings)}
-        plan, problems = validate(raw, ours, enemies, forts)
+        by_id = {u.id: self.abilities.get(u.type, []) for u in units if u.alliance == self.ai}
+        plan, problems = validate(raw, ours, enemies, forts, by_id)
         self.executor.set_plan(plan, units, t)
         self.plan_t = t
         self.plans += 1
