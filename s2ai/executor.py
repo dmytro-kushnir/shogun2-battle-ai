@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from .report import U, bearing, dist
+from .report import U, bearing, building_kind, dist
 
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 SPACING_EXTRA_M = 6.0   # gap between units in a line
@@ -38,6 +38,10 @@ class Executor:
         self.issued: dict[int, tuple[str, float]] = {}          # unit -> (signature, battle time sent)
         self.engaged: dict[int, int] = {}                      # unit -> enemy it is engaging by reflex
         self.last_orders: list[dict] = []
+        self.buildings: dict[int, dict] = {}                   # id -> building (from the bridge), for sieges
+
+    def set_buildings(self, buildings: dict[int, dict] | None) -> None:
+        self.buildings = buildings or {}
 
     def set_plan(self, plan: dict, units: list[U], t: float) -> None:
         self.plan, self.plan_t = plan, t
@@ -63,6 +67,13 @@ class Executor:
             members.sort(key=lambda u: (u.x - cx) * rx + (u.y - cy) * ry)
             for u, (sx, sy) in zip(members, line_slots(len(members), cx, cy, facing, [u.w for u in members])):
                 self.slots[u.id] = (sx, sy, facing)
+
+    def _fort_centre(self) -> tuple[float, float]:
+        pts = [(b["x"], b["y"]) for b in self.buildings.values()
+               if b.get("x") is not None and building_kind(b.get("name")) in ("wall", "tower", "gate")]
+        if not pts:
+            return 0.0, 0.0
+        return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
 
     def _group_of(self, uid: int) -> dict | None:
         if self.plan:
@@ -133,9 +144,22 @@ class Executor:
                     "_sig": f"attack:{target.id}"}
         if task == "withdraw":
             return {"cmd": "withdraw", "unit": u.id, "run": True, "_sig": "withdraw"}
-        if task in ("garrison", "climb", "attack_building"):
-            if task == "garrison" and u.garrisoned:
-                return None  # in place
+        if task == "garrison":
+            b = self.buildings.get(g["building"])
+            if b is not None and b.get("x") is not None and building_kind(b.get("name")) in ("wall", "tower", "gate"):
+                # Castle walls are not "defendable" buildings (run 20: defend_building refused every wall piece):
+                # a unit mans a wall section by standing on it. Move onto the piece, facing away from the castle.
+                cx, cy = self._fort_centre()
+                facing = bearing(cx, cy, b["x"], b["y"])
+                if math.hypot(u.x - b["x"], u.y - b["y"]) < 6:
+                    return None  # on the wall
+                return {"cmd": "move", "unit": u.id, "x": b["x"], "y": b["y"], "facing": facing, "run": True,
+                        "_sig": f"onwall:{g['building']}"}
+            if u.garrisoned:
+                return None  # inside
+            return {"cmd": "garrison", "unit": u.id, "building": g["building"], "run": True,
+                    "_sig": f"garrison:{g['building']}"}
+        if task in ("climb", "attack_building"):
             return {"cmd": task, "unit": u.id, "building": g["building"], "run": True,
                     "_sig": f"{task}:{g['building']}"}
         if task == "occupy":

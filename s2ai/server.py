@@ -103,6 +103,7 @@ class GeneralCommander:
             self._ask(battle, units, t)
         if self.executor.plan is None:
             return None
+        self.executor.set_buildings(battle.buildings)
         return self.executor.tick(units, t)
 
     def _ask(self, battle, units, t) -> None:
