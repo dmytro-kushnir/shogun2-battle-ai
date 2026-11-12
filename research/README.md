@@ -76,6 +76,14 @@ and surviving strength with bootstrap 95% intervals and Mann-Whitney U; Holm cor
 settings, opponent and condition). Recordings, plans and the analysis scripts are released; the game itself is
 needed to rerun.
 
+## Figures
+
+`research/figures.py` draws paper figures from the recordings (SVG + PNG into `research/figures/`, gitignored):
+battle snapshots (units with facing, frontage and depth, fortifications by kind and owner, the general's plan as
+arrows) and strength over time with the moments plans arrived. Planned: the architecture and planning-loop
+diagrams, and result charts (win rates with intervals, exchange ratios, cost and latency).
+`pip install -r research/requirements.txt` first.
+
 ## Run protocol
 
 1. Close other heavy programs; the same game settings (speed 1x: no fast-forward, the general plans in real time).

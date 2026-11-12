@@ -10,3 +10,6 @@ native/*.dll
 native/*.exe
 native/*.pdb
 native/*.lib
+
+# paper figures are rendered from local recordings
+research/figures/
