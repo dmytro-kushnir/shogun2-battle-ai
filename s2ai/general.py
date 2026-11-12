@@ -133,6 +133,10 @@ How to answer:
   Ships sink at a reported hull damage of 10-50%, most around 20-25%: a ship at 15% is in danger (SINKING RISK),
   pull it back out of range. A big ironclad (hull 6000-8000) outlasts corvettes: keep your ships together
   against it, mind its gun range, and do not let it pick off lone or damaged ships.
+  COASTAL BATTERIES are guns on the shore: they usually outrange ships (1000 m and more), your ships cannot be
+  ordered to attack them, and they keep firing at every ship in range. Fight the enemy ships outside the range of enemy batteries
+  - lure them out to you instead of chasing them under the guns - and only cross a battery's range at full speed.
+  Your own batteries cover you: fall back under them when outmatched.
 - Keep the plan if it still fits; repeat it and change only what needs changing.
 - `intent` is shown to the player in game: one short sentence, in character.
 - `next_plan_in_s`: 4-8 when armies are close or something is happening, up to 20-30 while manoeuvring far away.

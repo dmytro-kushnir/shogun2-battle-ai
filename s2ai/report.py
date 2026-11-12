@@ -92,6 +92,8 @@ def merge(static: dict[int, dict], state: dict) -> list[U]:
 
 def building_kind(name: str) -> str:
     n = (name or "").lower()
+    if "coastal_batter" in n:
+        return "battery"
     if "gate" in n:
         return "gate"
     if "keep" in n or "honmaru" in n:
@@ -146,7 +148,7 @@ def fort_section(forts: list[dict], ai: int) -> list[str]:
     out = ["", "FORTIFICATIONS (siege). Units on the walls / at the castle level stand at about this altitude: "
            f"{sum(zs) / len(zs):.0f} m. Extent x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}."]
     out.append("  Use the building id with the tasks garrison / climb / attack_building.")
-    order = {"gate": 0, "keep": 1, "tower": 2, "wall": 3, "building": 4}
+    order = {"gate": 0, "keep": 1, "tower": 2, "wall": 3, "battery": 4, "building": 5}
     for f in sorted(forts, key=lambda f: (order[f["kind"]], f["id"])):
         hp = f.get("hp")
         dmg = f" health {hp:.0%}" if isinstance(hp, (int, float)) and hp < 0.999 else ""
@@ -154,6 +156,49 @@ def fort_section(forts: list[dict], ai: int) -> list[str]:
         out.append(f"  b{f['id']:<4} {f['kind']:<6} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:4.0f} "
                    f"holds {f.get('cap') or 0:>3} men, {side(f.get('owner'))}{dmg}{gar}")
     return out
+
+
+def batteries(buildings: dict[int, dict] | None, stats: dict[str, dict] | None) -> list[dict]:
+    """Coastal batteries (shore guns that fire on ships) with their guns and range from the game's database
+    (range None when it is not known)."""
+    out = []
+    for b in (buildings or {}).values():
+        if b.get("x") is None or building_kind(b.get("name")) != "battery":
+            continue
+        st = (stats or {}).get(re.sub(r"_mp$", "", (b.get("name") or "").lower())) or {}
+        out.append({**b, "range": st.get("range"), "guns": st.get("guns"), "damage": st.get("damage"),
+                    "reload": st.get("reload")})
+    return out
+
+
+def battery_section(bats: list[dict], ai: int, ours: list[U]) -> list[str]:
+    if not bats:
+        return []
+    out = ["", "COASTAL BATTERIES (guns on the shore; they fire on ships in range; you cannot order an attack on them):"]
+    for b in sorted(bats, key=lambda b: (b.get("owner") == ai, b["id"])):
+        owner = b.get("owner")
+        side = "yours - they cover your ships" if owner == ai else "nobody's" if not owner else "ENEMY"
+        rng = b.get("range")
+        guns = f"{b['guns']} guns, " if b.get("guns") else ""
+        what = (f"{guns}range {rng:.0f}m, damage {b.get('damage')}, reload {b.get('reload')}s" if rng
+                else "range unknown (shore guns usually outrange ships)")
+        hp = b.get("hp")
+        dmg = f", health {hp:.0%}" if isinstance(hp, (int, float)) and hp < 0.999 else ""
+        line = f"  b{b['id']:<4} at ({b['x']:5.0f},{b['y']:5.0f}) {side}: {what}{dmg}"
+        if owner and owner != ai and rng:
+            hit = [f"{u.id} ({math.hypot(u.x - b['x'], u.y - b['y']):.0f}m)" for u in ours
+                   if u.alive and math.hypot(u.x - b["x"], u.y - b["y"]) <= rng]
+            line += " | can hit your " + ", ".join(hit) if hit else ""
+        out.append(line)
+    return out
+
+
+def battery_tag(u: U, bats: list[dict], ai: int) -> str:
+    """Our ship's line: the enemy batteries that can hit it now."""
+    hit = [f"b{b['id']} {math.hypot(u.x - b['x'], u.y - b['y']):.0f}m" for b in bats
+           if b.get("owner") and b.get("owner") != ai and b.get("range")
+           and math.hypot(u.x - b["x"], u.y - b["y"]) <= b["range"]]
+    return " | IN RANGE OF ENEMY BATTERY " + ", ".join(hit) if hit else ""
 
 
 def dist(a, b) -> float:
@@ -395,8 +440,11 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append(f"Enemy: {len(fit_theirs)} fighting units, {men_e} men, centre ({ex:.0f},{ey:.0f}), "
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
-    forts = fortifications(buildings) if not naval else []  # coastal buildings mean nothing to ships
+    # at sea only the coastal batteries matter (they outrange most ships: battle 20261112-192928)
+    forts = fortifications(buildings) if not naval else []
+    bats = batteries(buildings, unit_stats) if naval else []
     out.extend(fort_section(forts, ai))
+    out.extend(battery_section(bats, ai, ours))
     if not forts and not naval:  # in a siege the castle is the formation; at sea there are no flanks to ride
         out.extend(formation_section(theirs, ours))
     if terrain is not None and not naval:
@@ -408,6 +456,7 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     for u in sorted(ours, key=lambda u: (u.kind, u.id)):
         out.append(unit_line(u, fit_theirs, show_nearest=True,
                              extra=mtag(u) + (fire_tag(u, fit_theirs) if u.fighting_fit else "") + ab_tag(u)
+                             + battery_tag(u, bats, ai)
                              + ((unit_note(u.id) or "") if unit_note and u.fighting_fit else "")))
     ours_ab = sorted({a for u in ours if u.fighting_fit for a in abilities.get(u.type, [])})
     if ours_ab and static_info:

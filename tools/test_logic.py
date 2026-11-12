@@ -197,6 +197,38 @@ def test_ship_shot_types():
                                                          if k in ("cmd", "unit", "target")}
 
 
+def test_coastal_batteries():
+    from s2ai import report
+    from s2ai.gamedata import battery_stats
+    # game data: building coastal_batteries_<size> <- crew Boshin_Art_Coastal_Guns_<Size> <- boshin_coastal_cannon_<size>
+    stats = {"Boshin_Art_Coastal_Guns_Medium": {"guns": 6}, "Boshin_Art_Coastal_Guns__Large_MP": {"guns": 8}}
+    shots = {"boshin_coastal_cannon_medium": ["p_med"], "boshin_coastal_cannon_large_mp": ["p_large"]}
+    proj = {"p_med": {"shot": "solid_shot", "range": 1000, "damage": 200, "reload": 8},
+            "p_large": {"shot": "solid_shot", "range": 1100, "damage": 300, "reload": 9}}
+    bs = battery_stats(stats, shots, proj)
+    assert bs["coastal_batteries_medium"] == {"kind": "battery", "guns": 6, "shot": "solid_shot", "range": 1000,
+                                              "damage": 200, "reload": 8}, bs
+    assert bs["coastal_batteries_large"]["guns"] == 8 and bs["coastal_batteries_large"]["range"] == 1100, bs
+    # battle 20261112-192928: the frigate took damage from a battery at 862 m while no ship could reach it
+    static = {10001: {"id": 10001, "alliance": 1, "type": "Frigate", "men0": 205, "ship": True},
+              20001: {"id": 20001, "alliance": 2, "type": "Corvette", "men0": 80, "ship": True}}
+    state = {"t": 130, "phase": "conflict",
+             "units": [{"id": 10001, "x": -507, "y": -198, "men": 203, "hull": 0.01},
+                       {"id": 20001, "x": -400, "y": 650, "men": 80, "hull": 0}]}
+    buildings = {4: {"id": 4, "name": "coastal_batteries_medium", "owner": 2, "x": -87, "y": 555, "hp": 1,
+                     "mil": True, "cap": 18},
+                 7: {"id": 7, "name": "coastal_batteries_medium_mp", "owner": 1, "x": -500, "y": -900, "hp": 1,
+                     "mil": True, "cap": 18},
+                 9: {"id": 9, "name": "village_house_01", "owner": 0, "x": 0, "y": 0, "mil": False}}
+    text, _ = report.build(static, state, 1, [], None, None, buildings, unit_stats={**bs})
+    assert "COASTAL BATTERIES" in text, text
+    assert "b4    at (  -87,  555) ENEMY: 6 guns, range 1000m" in text, text
+    assert "can hit your 10001 (862m)" in text, text
+    assert "IN RANGE OF ENEMY BATTERY b4 862m" in text, text
+    assert "b7" in text and "yours" in text and "village" not in text, text
+    assert "FORTIFICATIONS" not in text, text   # at sea: no siege section
+
+
 def test_gameai_opponent():
     from types import SimpleNamespace
     from s2ai.server import GameAIOpponent, NoCommander

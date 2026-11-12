@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import struct
 import threading
 import zlib
@@ -393,7 +394,27 @@ def ship_stats(ships: dict, gun_shots: dict, projectiles: dict) -> dict[str, dic
     return out
 
 
-CACHE_VERSION = 5
+def battery_stats(stats: dict, gun_shots: dict, projectiles: dict) -> dict[str, dict]:
+    """Coastal batteries (shore guns in naval battles near a port) -> {battlefield building key: {kind, guns, shot,
+    range, damage, reload}}. The building coastal_batteries_<size> is crewed by the unit Boshin_Art_Coastal_Guns_<Size>
+    (db battlefield_buildings) whose cannon are boshin_coastal_cannon_<size> (db gun_type_to_projectiles)."""
+    crews = {re.sub(r"_+", "_", k.lower()): st for k, st in stats.items()}
+    out = {}
+    for gun, prs in gun_shots.items():
+        m = re.fullmatch(r"\w*coastal_cannon_(\w+?)(_mp)?", gun.lower())
+        best = max((projectiles[p] for p in prs if p in projectiles), key=lambda p: (p["range"], p["damage"]),
+                   default=None)
+        if not m or not best:
+            continue
+        size = m.group(1)
+        crew = next((st for k, st in sorted(crews.items(), key=lambda kv: kv[0].endswith("_mp"))
+                     if k.removesuffix("_mp").endswith(f"coastal_guns_{size}")), {})
+        out[f"coastal_batteries_{size}"] = {"kind": "battery", "guns": crew.get("guns") or 0, "shot": best["shot"],
+                                            **{k: best[k] for k in ("range", "damage", "reload")}}
+    return out
+
+
+CACHE_VERSION = 6
 SHIPS = "db\\unit_stats_naval_tables\\unit_stats_naval"
 GUN_SHOTS = "db\\gun_type_to_projectiles_tables\\gun_type_to_projectiles"
 PROJECTILES = "db\\projectiles_tables\\projectiles"
@@ -473,6 +494,7 @@ def _read_game_data(packs: list[Path], stamp: list) -> dict:
                     log.warning("could not read %s from %s: %s", name.rsplit("\\", 1)[-1], pack, e)
     for st in stats.values():  # speeds come from the man's entity, or the horse's for cavalry
         st.update(entities.get(st.pop("_entity", None), {}))
+    stats.update(battery_stats(stats, gun_shots, projectiles))  # keyed by building, read before ships join
     stats.update(ship_stats(ships, gun_shots, projectiles))  # ships live with the land units' stats
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
     units = {u: ab for u, ab in units.items() if ab}
