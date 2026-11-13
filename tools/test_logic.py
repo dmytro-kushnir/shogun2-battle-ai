@@ -248,7 +248,18 @@ def test_siege_assault_and_tempo():
     text, units = report.build(static, state, 1, [], None, None, walls, idle_s=120)
     assert "SIEGE - YOU ATTACK" in text and "FORTIFICATIONS" not in text, text
     assert "OPEN" in text and "b40   gate" in text and "BROKEN" in text, text
-    assert "the 10 nearest" in text and text.count(" wall  at") == 10, text
+    # climb points are spread out (walls here are 20 m apart in a row): 5 points, 60 m+ apart
+    pts = [ln for ln in text.splitlines() if " wall  at" in ln]
+    assert len(pts) == 5, text
+    xs = sorted(int(ln.split("at (")[1].split(",")[0]) for ln in pts)
+    assert all(b - a >= 60 for a, b in zip(xs, xs[1:])), xs
+    assert "Defenders' missiles reach up to 125 m" in text, text
+    # a hill castle: an inner ring 8 m higher is a second level with its own climb points
+    walls2 = dict(walls)
+    walls2.update({i: {"id": i, "name": f"castle_wall_{i}", "owner": 2, "x": 20 * (i - 100), "y": 60, "z": 8, "hp": 1,
+                       "mil": True, "cap": 40} for i in range(100, 106)})
+    t2, _ = report.build(static, state, 1, [], None, None, walls2)
+    assert "2 levels" in t2 and "top level: climb points" in t2 and "outer level: climb points" in t2, t2
     assert "Your army by role: 1 missile infantry, 1 shock cavalry, 1 spears" in text, text
     assert "TEMPO" in text and "climb the walls" in text, text
     for b in walls.values():   # the same castle defended: full list, no tempo nagging
@@ -263,6 +274,22 @@ def test_siege_assault_and_tempo():
                                     {"units": [1, 3], "task": "hold"}]}, units, 1)
     assert goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 300]}]}, units, 1)
     assert not goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 430]}]}, units, 1)
+
+
+def test_missile_line_width():
+    from s2ai.executor import line_width
+    gun = unit(1, 2, 0, 0, "inf", 120, "Inf_Missile_Matchlock_Samurai", True)
+    gun.w = 20.0                        # siege 20261113-193825: 6 deep
+    assert line_width(gun) == 60.0      # two ranks
+    gun.men, gun.w = 200, 50.0
+    assert line_width(gun) == 80.0      # capped
+    spear = unit(2, 2, 0, 0, "inf", 160, "Inf_Spear_Yari_Samurai")
+    spear.w = 30.0
+    assert line_width(spear) == 30.0    # melee keeps its formation
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan_of(group([1], task="hold")), [gun], 0)
+    o = ex.tick([gun], 0)[1]
+    assert o and o[0]["cmd"] == "move" and o[0]["width"] == 80.0, o  # standing in place, but too deep: re-form
 
 
 def test_ai_alliance():

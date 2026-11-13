@@ -163,39 +163,80 @@ def fort_section(forts: list[dict], ai: int) -> list[str]:
     return out
 
 
-def assault_section(forts: list[dict], ai: int, ours: list["U"], walls_shown: int = 10) -> list[str]:
+LEVEL_GAP_M = 4.0       # fort pieces this much higher than the last start a new level (ring) of the castle
+CLIMB_SPREAD_M = 60.0   # climb points offered this far apart, so an assault splits the defence
+CLIMB_POINTS = 5        # climb points offered per level
+
+
+def castle_levels(forts: list[dict]) -> list[list[dict]]:
+    """Castle pieces grouped by altitude, lowest (outer) ring first. A hill castle has several rings (siege
+    20261113-193825: walls at 160, 167 and 174 m)."""
+    levels: list[list[dict]] = []
+    for f in sorted(forts, key=lambda f: f.get("z") or 0):
+        if levels and (f.get("z") or 0) - (levels[-1][-1].get("z") or 0) < LEVEL_GAP_M:
+            levels[-1].append(f)
+        else:
+            levels.append([f])
+    return levels
+
+
+def spread(pieces: list[dict], key, n: int, gap: float) -> list[dict]:
+    """Up to n pieces, best first by key, each at least gap metres from those already taken."""
+    out: list[dict] = []
+    for f in sorted(pieces, key=key):
+        if all(math.hypot(f["x"] - o["x"], f["y"] - o["y"]) >= gap for o in out):
+            out.append(f)
+            if len(out) == n:
+                break
+    return out
+
+
+def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U"] | None = None) -> list[str]:
     """Sieges where we attack: the ways in, not every wall piece (battle 20261113-192734 listed 94 pieces and the
-    general never climbed or went through the two broken gates)."""
+    general never climbed). Climb points are spread out and given per level: in siege 20261113-193825 the ten
+    nearest sections were all one corner, and five units climbed there together."""
     if not forts:
         return []
     ox, oy = centre([u for u in ours if u.fighting_fit] or ours)
     near = lambda f: math.hypot(f["x"] - ox, f["y"] - oy)
     broken = lambda f: isinstance(f.get("hp"), (int, float)) and f["hp"] < 0.05
-    keep = [f for f in forts if f["kind"] == "keep"]
+    levels = castle_levels(forts)
+    top = levels[-1]
+    keep = [f for f in forts if f["kind"] == "keep"] or top
+    cx, cy = sum(f["x"] for f in keep) / len(keep), sum(f["y"] for f in keep) / len(keep)
     xs, ys = [f["x"] for f in forts], [f["y"] for f in forts]
-    cx, cy = (sum(f["x"] for f in keep) / len(keep), sum(f["y"] for f in keep) / len(keep)) if keep else \
-        ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
-    out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; its centre "
-               f"(the keep, take it with task occupy) about ({cx:.0f},{cy:.0f}). Ways in, nearest to your army first:"]
-    line = lambda f, extra="": (f"  b{f['id']:<4} {f['kind']:<5} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:3.0f}, "
+    out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; the "
+               f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f})."]
+    shooters = [e for e in (theirs or []) if e.fighting_fit and e.missile and e.range]
+    if shooters:
+        far = max(e.range for e in shooters)
+        out.append(f"  Defenders' missiles reach up to {far:.0f} m: keep cavalry and waiting units farther than that "
+                   "from them (walls and towers add height and reach).")
+    line = lambda f, extra="": (f"    b{f['id']:<4} {f['kind']:<5} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:3.0f}, "
                                 f"{near(f):4.0f} m from your army{extra}{' GARRISONED' if f.get('gar') else ''}")
     gaps = sorted([f for f in forts if broken(f) and f["kind"] in ("gate", "wall")], key=near)
-    gates = sorted([f for f in forts if f["kind"] == "gate" and not broken(f)], key=near)
-    walls = sorted([f for f in forts if f["kind"] == "wall" and not broken(f)], key=near)
-    towers = sorted([f for f in forts if f["kind"] == "tower" and not broken(f)], key=near)
     if gaps:
-        out.append(" OPEN (broken gates / walls - march or ride straight in):")
-        out.extend(line(f, " BROKEN") for f in gaps)
-    if gates:
-        out.append(" Gates still shut (attack_building to break one - slow; better climb next to it):")
-        out.extend(line(f) for f in gates)
-    if walls:
-        out.append(f" Wall sections to climb (task climb; {len(walls)} intact, the {min(walls_shown, len(walls))} "
-                   "nearest):")
-        out.extend(line(f) for f in walls[:walls_shown])
-    if towers:
-        out.append(" Towers (they shoot at you; climb or avoid): "
-                   + ", ".join(f"b{f['id']} ({f['x']:.0f},{f['y']:.0f})" for f in towers[:6]))
+        out.append("  OPEN (broken gates / walls - march or ride straight in):")
+        out.extend(line(f, " BROKEN") for f in gaps[:8])
+    if len(levels) > 1:
+        out.append(f"  The castle has {len(levels)} levels (rings of walls), outer first: "
+                   + ", ".join(f"alt {min(f.get('z') or 0 for f in lv):.0f}-{max(f.get('z') or 0 for f in lv):.0f}"
+                               f" ({len(lv)} pieces)" for lv in levels)
+                   + ". Over one ring, the next is another climb: keep climbing level by level to the top.")
+    for i, lv in enumerate(levels):
+        walls = [f for f in lv if f["kind"] == "wall" and not broken(f)]
+        gates = [f for f in lv if f["kind"] == "gate" and not broken(f)]
+        pts = spread(walls, near, CLIMB_POINTS, CLIMB_SPREAD_M)
+        name = "outer level" if i == 0 else "top level" if i == len(levels) - 1 else f"level {i + 1}"
+        if len(levels) == 1:
+            name = "walls"
+        if pts:
+            out.append(f"  {name}: climb points at least {CLIMB_SPREAD_M:.0f} m apart (task climb; send units to "
+                       "DIFFERENT points at the same time):")
+            out.extend(line(f) for f in pts)
+        if gates:
+            out.append(f"    shut gates here (attack_building, slow): "
+                       + ", ".join(f"b{f['id']} ({f['x']:.0f},{f['y']:.0f})" for f in sorted(gates, key=near)[:3]))
     return out
 
 
@@ -517,7 +558,7 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     bats = batteries(buildings, unit_stats) if naval else []
     owners = [f.get("owner") for f in forts if f.get("owner")]
     attacking = bool(owners) and sum(o != ai for o in owners) > len(owners) / 2
-    out.extend(assault_section(forts, ai, ours) if attacking else fort_section(forts, ai))
+    out.extend(assault_section(forts, ai, ours, theirs) if attacking else fort_section(forts, ai))
     out.extend(battery_section(bats, ai, ours))
     defending_walls = bool(owners) and not attacking
     if idle_s is not None and idle_s >= IDLE_WARN_S and not defending_walls:

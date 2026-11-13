@@ -13,6 +13,19 @@ REISSUE_S = 12.0        # repeat an unchanged command this often if the unit see
 SPACING_EXTRA_M = 6.0   # gap between units in a line
 DEFAULT_WIDTH_M = 30.0
 VIA_REACHED_M = 30.0     # a unit counts as through a waypoint this close to it
+# Missile infantry fires from its front ranks: in siege 20261113-193825 matchlocks stood 6 deep (120 men on 20 m)
+# and bows 4 deep. Formed in a line it gets MISSILE_RANKS ranks, about MAN_FRONTAGE_M per man (start-of-battle
+# widths: 200 men in 4 ranks on 47-54 m), at most MISSILE_LINE_MAX_M wide.
+MISSILE_RANKS = 2
+MAN_FRONTAGE_M = 1.0
+MISSILE_LINE_MAX_M = 80.0
+
+
+def line_width(u: U) -> float | None:
+    """The width a unit forms its line at: missile infantry spreads out to MISSILE_RANKS ranks."""
+    if u.kind == "inf" and u.missile and u.men > 0:
+        return max(u.w or 0.0, min(MISSILE_LINE_MAX_M, u.men / MISSILE_RANKS * MAN_FRONTAGE_M))
+    return u.w or None
 DEFAULT_TIMING = {"active": 30.0, "recharge": 180.0, "uses": -1}
 
 # Cavalry hit-and-run: a charge does its damage on impact; cavalry that stays in a melee bleeds (battle 091516:
@@ -156,7 +169,8 @@ class Executor:
             rx, ry = math.sin(rad + math.pi / 2), math.cos(rad + math.pi / 2)
             # keep left-to-right order as they stand now, so units do not cross each other's paths
             members.sort(key=lambda u: (u.x - cx) * rx + (u.y - cy) * ry)
-            for u, (sx, sy) in zip(members, line_slots(len(members), cx, cy, facing, [u.w for u in members])):
+            for u, (sx, sy) in zip(members, line_slots(len(members), cx, cy, facing,
+                                                       [line_width(u) for u in members])):
                 self.slots[u.id] = (sx, sy, facing)
         # waypoints: each unit gets its own spot at every waypoint (a line across the direction of travel), so a
         # group goes around a flank side by side instead of piling onto one point
@@ -385,7 +399,9 @@ class Executor:
         if slot is None:
             return None
         x, y, facing = slot
-        if math.hypot(u.x - x, u.y - y) < 8 and abs(((u.h - facing) + 180) % 360 - 180) < 20:
-            return None  # in its slot: nothing to do
-        return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": facing, "width": u.w or None,
+        width = line_width(u)
+        if math.hypot(u.x - x, u.y - y) < 8 and abs(((u.h - facing) + 180) % 360 - 180) < 20 and \
+                not (width and u.w and width > u.w + 5):
+            return None  # in its slot and formed: nothing to do
+        return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": facing, "width": width,
                 "run": g["run"], "_sig": f"move:{round(x / 5)}:{round(y / 5)}:{round(facing / 10)}:{g['run']}"}
