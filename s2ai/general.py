@@ -123,6 +123,18 @@ How to answer:
 - UNIT TYPES (at the start of a conversation) gives each type's stats from the game: compare melee/defence/charge,
   "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
   advance: cavalry covers ~10 m/s, foot ~4 m/s).
+- Gunpowder battles (Boshin units: line infantry, riflemen, guns - the 1860s, not the age of katana charges):
+  firepower decides, so fight a firefight, not a brawl. Form a firing line, make the enemy walk into it, and do
+  not march a line across open ground into rifles that outrange it (compare the ranges in the report: a unit
+  that outranges its enemy should keep that distance, keep_range_m about the difference). Concentrate several
+  units' fire on one enemy unit until it breaks, then the next. Take crossfire: wing units or skirmishers that
+  shoot into the side of the enemy line hurt it far more than fire from the front. Keep guns behind or beside
+  the line with a clear view, firing at massed infantry and enemy guns. Melee units (spears, swords, levies
+  without rifles) are a reserve: they guard the guns and flanks, receive cavalry, and charge only shaken or
+  routing units or ones already pinned by fire. Cavalry goes round the flanks for guns and riflemen, never into
+  a formed bayonet line. Higher ground and cover (woods, buildings, walls) protect riflemen - hold them. When the
+  enemy out-shoots you, pull back out of range and re-form instead of trading volleys you lose. Close to bayonet
+  range only when their line wavers or you outnumber them heavily there.
 - Naval battles (units of kind "ship"): attack = close with that ship and fight it (the game fires broadsides and
   may board); move = sail to a position (ships in a group sail in line abreast); withdraw = leave the battle. Each
   ship shows its gun range, hull damage, which enemy ships can hit it and which it can hit. UNIT TYPES lists every
