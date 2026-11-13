@@ -95,6 +95,17 @@ the plan out twice a second without you: it moves groups into lines, attacks tar
 breaks, and runs the reflexes you set (engage_within_m: attack enemies that come close; keep_range_m: missile units
 step back from melee threats). You only command YOUR units (the ids under YOUR UNITS).
 
+Be a worthy, active opponent - the player is here for a good fight. Take the initiative: pick a plan that suits
+YOUR army (the report gives both armies by role) and carry it out - flank with cavalry, mass fire on one point,
+feint and strike elsewhere, threaten their guns and general, assault walls. Waiting is right only behind your own
+walls or while the enemy walks into your fire; never leave the army standing for long with no enemy coming
+(the report shows TEMPO when you do). Make it a contest, not a slaughter of your own men: attack with a plan,
+not blindly.
+Fit the tactics to the army: many cavalry -> wide flanking rides and charges on missile units and guns; many
+missile units -> a firing line with crossfire, melee units guarding it; strong melee (samurai, swords) -> close
+fast under cover and charge where the enemy is weakest; ninjas -> hide, then hit guns, generals or the rear, or
+climb walls first; guns -> a protected battery that pounds massed infantry.
+
 How to answer:
 - Put every one of your fighting units in exactly one group. Give each group one task.
 - attack: `target` = an enemy id. move: `position` = [x, y] for the group's centre; the units form a line there
@@ -106,7 +117,14 @@ How to answer:
   building; pick the sections facing the enemy). Any infantry unit can man a wall: missile units shoot from the
   walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
-  Attackers use climb on a wall section, attack_building on a gate, and occupy on the keep's area.
+  ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
+  trading fire - assault. Any infantry climbs a wall section with task climb (its building id; ninjas climb
+  fastest). Units on the ladders cannot fight back, so first pin the defenders of that stretch with missile fire,
+  then climb in two or three places at once to split the defence, melee infantry first. OPEN gates and walls
+  (broken) need no climbing: send infantry straight through, then cavalry. attack_building on a shut gate is
+  slow - climbing next to it is usually faster. Cavalry cannot climb or dismount: it waits out of tower range,
+  rides down defenders who sally out or run, and goes in through open gates once the way is clear. Then push to
+  the keep: task occupy at its centre takes the castle.
 - Routes: `via` = up to 3 waypoints the group goes through before its task. Use it to go AROUND an enemy line
   instead of through its fire: the ENEMY FORMATION section gives flank routes that stay out of its small-arms
   range. A unit that is "in range of enemy ..." is being shot at, or can be.
@@ -124,8 +142,9 @@ How to answer:
   "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
   advance: cavalry covers ~10 m/s, foot ~4 m/s).
 - Gunpowder battles (Boshin units: line infantry, riflemen, guns - the 1860s, not the age of katana charges):
-  firepower decides, so fight a firefight, not a brawl. Form a firing line, make the enemy walk into it, and do
-  not march a line across open ground into rifles that outrange it (compare the ranges in the report: a unit
+  firepower decides, so fight a firefight, not a brawl - but fight it: advance in good order to your own
+  effective range and open fire; do not wait for an enemy who is not coming. Do not march a line across open
+  ground into rifles that outrange it without a flank attack or cover (compare the ranges in the report: a unit
   that outranges its enemy should keep that distance, keep_range_m about the difference). Concentrate several
   units' fire on one enemy unit until it breaks, then the next. Take crossfire: wing units or skirmishers that
   shoot into the side of the enemy line hurt it far more than fire from the front. Keep guns behind or beside

@@ -229,6 +229,42 @@ def test_coastal_batteries():
     assert "FORTIFICATIONS" not in text, text   # at sea: no siege section
 
 
+def test_siege_assault_and_tempo():
+    from s2ai import report
+    from s2ai.server import goes_forward
+    static = {1: {"id": 1, "alliance": 1, "type": "Boshin_Inf_Line_Infantry", "men0": 160, "range": 125, "ammo0": 30},
+              2: {"id": 2, "alliance": 1, "type": "Boshin_Cav_Sword_Sabre_Cavalry", "men0": 60, "cav": True},
+              3: {"id": 3, "alliance": 1, "type": "Boshin_Inf_Spear_Levy", "men0": 160},
+              9: {"id": 9, "alliance": 2, "type": "Boshin_Inf_Line_Red_Bear_Infantry", "men0": 160, "range": 125,
+                  "ammo0": 30}}
+    state = {"t": 100, "phase": "conflict", "units": [{"id": 1, "x": 0, "y": 400, "men": 160},
+                                                       {"id": 2, "x": 30, "y": 420, "men": 60},
+                                                       {"id": 3, "x": -30, "y": 400, "men": 160},
+                                                       {"id": 9, "x": 0, "y": 150, "men": 160}]}
+    walls = {i: {"id": i, "name": f"castle_wall_{i}", "owner": 2, "x": 20 * i - 200, "y": 140, "hp": 1, "mil": True,
+                 "cap": 40} for i in range(1, 25)}
+    walls[40] = {"id": 40, "name": "castle_gate_02", "owner": 2, "x": 26, "y": 140, "hp": 0, "mil": True, "cap": 68}
+    walls[38] = {"id": 38, "name": "castle_gate_01", "owner": 2, "x": 66, "y": 0, "hp": 1, "mil": True, "cap": 68}
+    text, units = report.build(static, state, 1, [], None, None, walls, idle_s=120)
+    assert "SIEGE - YOU ATTACK" in text and "FORTIFICATIONS" not in text, text
+    assert "OPEN" in text and "b40   gate" in text and "BROKEN" in text, text
+    assert "the 10 nearest" in text and text.count(" wall  at") == 10, text
+    assert "Your army by role: 1 missile infantry, 1 shock cavalry, 1 spears" in text, text
+    assert "TEMPO" in text and "climb the walls" in text, text
+    for b in walls.values():   # the same castle defended: full list, no tempo nagging
+        b["owner"] = 1
+    text, _ = report.build(static, state, 1, [], None, None, walls, idle_s=120)
+    assert "FORTIFICATIONS" in text and "TEMPO" not in text, text
+    assert "TEMPO" not in report.build(static, state, 1, [], None, None, None, idle_s=30)[0]
+    # what counts as going forward: a third of the army attacking or advancing 60 m+ toward the enemy
+    hold = {"groups": [{"units": [1, 2, 3], "task": "hold", "position": None}]}
+    assert not goes_forward(hold, units, 1)
+    assert goes_forward({"groups": [{"units": [2], "task": "attack", "target": 9},
+                                    {"units": [1, 3], "task": "hold"}]}, units, 1)
+    assert goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 300]}]}, units, 1)
+    assert not goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 430]}]}, units, 1)
+
+
 def test_ai_alliance():
     from s2ai.server import guess_ai_alliance
     arm = lambda *a: {"armies": [{"alliance": al, "army": n, "handicap": h} for al, n, h in a]}

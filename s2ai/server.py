@@ -61,6 +61,33 @@ def guess_ai_alliance(start: dict) -> int:
     return 2
 
 
+FORWARD_SHARE = 1 / 3   # of the fighting units, for a plan to count as going forward
+FORWARD_M = 60.0        # a move this much closer to the enemy's centre counts as an advance
+
+
+def goes_forward(plan: dict, units, ai: int) -> bool:
+    """Does the plan send at least FORWARD_SHARE of our fighting units at the enemy (attack, an assault task, or
+    a move that takes the group FORWARD_M closer to the enemy's centre)?"""
+    ours = {u.id: u for u in units if u.alliance == ai and u.fighting_fit}
+    theirs = [u for u in units if u.alliance != ai and u.fighting_fit]
+    if not ours or not theirs:
+        return False
+    ex, ey = report.centre(theirs)
+    n = 0
+    for g in plan.get("groups", []):
+        members = [ours[i] for i in g.get("units", []) if i in ours]
+        if not members:
+            continue
+        if g.get("task") in ("attack", "climb", "attack_building", "occupy"):
+            n += len(members)
+        elif g.get("task") == "move" and g.get("position"):
+            gx, gy = report.centre(members)
+            px, py = g["position"][:2]
+            if math.hypot(gx - ex, gy - ey) - math.hypot(px - ex, py - ey) >= FORWARD_M:
+                n += len(members)
+    return n >= FORWARD_SHARE * len(ours)
+
+
 def conflict(battle) -> bool:
     return battle.phase == "conflict" or (battle.state is not None and battle.state["t"] >= START_PLANNING_AFTER_S)
 
@@ -179,6 +206,7 @@ class GeneralCommander:
         self.busy = False
         self.next_plan_t = 0.0
         self.plan_t = 0.0
+        self.forward_t: float | None = None  # when a plan last sent a real share of the army forward
         self.plans = 0
         self.plan_log = link.runtime / f"plans-{battle_id}.jsonl"
         self.fail_log = link.runtime / f"failures-{battle_id}.jsonl"
@@ -231,7 +259,8 @@ class GeneralCommander:
                                battle.morale, self.abilities,
                                ability_state=lambda uid, a: self.executor.ability_text(uid, a, t),
                                unit_stats=self.stats, unit_note=self.executor.unit_note,
-                               static_info=getattr(self.general, "fresh", True))
+                               static_info=getattr(self.general, "fresh", True),
+                               idle_s=t - self.forward_t if self.forward_t is not None else None)
         self.busy = True
         self.board.note(f"t={t:.0f}s asking the general…")
 
@@ -259,6 +288,8 @@ class GeneralCommander:
         by_id = {u.id: self.abilities.get(u.type, []) for u in units if u.alliance == self.ai}
         plan, problems = validate(raw, ours, enemies, forts, by_id)
         problems += self.executor.set_plan(plan, units, t)
+        if self.forward_t is None or goes_forward(plan, units, self.ai):
+            self.forward_t = t
         self.plan_t = t
         self.plans += 1
         wait = max(plan["next_plan_in_s"], self.min_plan_s)

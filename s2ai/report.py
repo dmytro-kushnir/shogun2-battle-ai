@@ -63,6 +63,11 @@ def pretty_type(t: str) -> str:
 # fraction of what a ship can take.
 SHIP_HULL_DANGER = 0.15
 
+# The general held every unit for the first 260 s of field battle 20261113-191107 and lost; players find an
+# idle opponent dull. After this long without a plan that sends a real share of the army forward the report
+# says so.
+IDLE_WARN_S = 75.0
+
 
 def merge(static: dict[int, dict], state: dict) -> list[U]:
     units = []
@@ -156,6 +161,70 @@ def fort_section(forts: list[dict], ai: int) -> list[str]:
         out.append(f"  b{f['id']:<4} {f['kind']:<6} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:4.0f} "
                    f"holds {f.get('cap') or 0:>3} men, {side(f.get('owner'))}{dmg}{gar}")
     return out
+
+
+def assault_section(forts: list[dict], ai: int, ours: list["U"], walls_shown: int = 10) -> list[str]:
+    """Sieges where we attack: the ways in, not every wall piece (battle 20261113-192734 listed 94 pieces and the
+    general never climbed or went through the two broken gates)."""
+    if not forts:
+        return []
+    ox, oy = centre([u for u in ours if u.fighting_fit] or ours)
+    near = lambda f: math.hypot(f["x"] - ox, f["y"] - oy)
+    broken = lambda f: isinstance(f.get("hp"), (int, float)) and f["hp"] < 0.05
+    keep = [f for f in forts if f["kind"] == "keep"]
+    xs, ys = [f["x"] for f in forts], [f["y"] for f in forts]
+    cx, cy = (sum(f["x"] for f in keep) / len(keep), sum(f["y"] for f in keep) / len(keep)) if keep else \
+        ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+    out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; its centre "
+               f"(the keep, take it with task occupy) about ({cx:.0f},{cy:.0f}). Ways in, nearest to your army first:"]
+    line = lambda f, extra="": (f"  b{f['id']:<4} {f['kind']:<5} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:3.0f}, "
+                                f"{near(f):4.0f} m from your army{extra}{' GARRISONED' if f.get('gar') else ''}")
+    gaps = sorted([f for f in forts if broken(f) and f["kind"] in ("gate", "wall")], key=near)
+    gates = sorted([f for f in forts if f["kind"] == "gate" and not broken(f)], key=near)
+    walls = sorted([f for f in forts if f["kind"] == "wall" and not broken(f)], key=near)
+    towers = sorted([f for f in forts if f["kind"] == "tower" and not broken(f)], key=near)
+    if gaps:
+        out.append(" OPEN (broken gates / walls - march or ride straight in):")
+        out.extend(line(f, " BROKEN") for f in gaps)
+    if gates:
+        out.append(" Gates still shut (attack_building to break one - slow; better climb next to it):")
+        out.extend(line(f) for f in gates)
+    if walls:
+        out.append(f" Wall sections to climb (task climb; {len(walls)} intact, the {min(walls_shown, len(walls))} "
+                   "nearest):")
+        out.extend(line(f) for f in walls[:walls_shown])
+    if towers:
+        out.append(" Towers (they shoot at you; climb or avoid): "
+                   + ", ".join(f"b{f['id']} ({f['x']:.0f},{f['y']:.0f})" for f in towers[:6]))
+    return out
+
+
+def role(u: "U") -> str:
+    t = u.type.lower()
+    if u.kind == "ship":
+        return "ships"
+    if u.general:
+        return "generals"
+    if u.kind == "art":
+        return "guns"
+    if u.kind == "cav":
+        return "missile cavalry" if u.missile else "shock cavalry"
+    if "ninja" in t:
+        return "ninjas"
+    if u.missile:
+        return "missile infantry"
+    if "spear" in t or "yari" in t or "pike" in t:
+        return "spears"
+    return "melee infantry"
+
+
+def character(units: list["U"]) -> str:
+    """The army by role, e.g. "8 missile infantry, 5 spears, 6 shock cavalry"."""
+    n: dict[str, int] = {}
+    for u in units:
+        if u.fighting_fit:
+            n[role(u)] = n.get(role(u), 0) + 1
+    return ", ".join(f"{c} {r}" for r, c in sorted(n.items(), key=lambda kv: -kv[1])) or "none"
 
 
 def batteries(buildings: dict[int, dict] | None, stats: dict[str, dict] | None) -> list[dict]:
@@ -403,12 +472,13 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
           plan_age_s: float | None, buildings: dict[int, dict] | None = None, terrain=None,
           morale=None, abilities: dict[str, list[str]] | None = None,
           ability_state=None, unit_stats: dict[str, dict] | None = None, unit_note=None,
-          static_info: bool = True) -> tuple[str, list[U]]:
+          static_info: bool = True, idle_s: float | None = None) -> tuple[str, list[U]]:
     """abilities: {unit type: usable special abilities} (gamedata.unit_abilities); ability_state(unit id, ability)
     -> text with its state, e.g. "rally (ready)" (Executor.ability_text); unit_stats: {unit type: stats}
     (gamedata.unit_stats); unit_note(unit id) -> extra text for our unit's line (what the executor does with it).
     static_info: include what does not change in a battle (unit type stats, ability descriptions) - the general
-    keeps it in its conversation, so it is only needed when a conversation starts."""
+    keeps it in its conversation, so it is only needed when a conversation starts. idle_s: seconds since the
+    general's plans last sent a real share of the army forward (None = not tracked)."""
     units = merge(static, state)
     abilities = abilities or {}
     for u in units:  # ships: gun range from the game's database (the engine does not report it)
@@ -440,11 +510,22 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     out.append(f"Enemy: {len(fit_theirs)} fighting units, {men_e} men, centre ({ex:.0f},{ey:.0f}), "
                f"{math.hypot(ex - ox, ey - oy):.0f} m to the {compass(bearing(ox, oy, ex, ey))} "
                f"(bearing {bearing(ox, oy, ex, ey):.0f}).")
+    if not naval:
+        out.append(f"Your army by role: {character(ours)}. Enemy by role: {character(theirs)}.")
     # at sea only the coastal batteries matter (they outrange most ships: battle 20261112-192928)
     forts = fortifications(buildings) if not naval else []
     bats = batteries(buildings, unit_stats) if naval else []
-    out.extend(fort_section(forts, ai))
+    owners = [f.get("owner") for f in forts if f.get("owner")]
+    attacking = bool(owners) and sum(o != ai for o in owners) > len(owners) / 2
+    out.extend(assault_section(forts, ai, ours) if attacking else fort_section(forts, ai))
     out.extend(battery_section(bats, ai, ours))
+    defending_walls = bool(owners) and not attacking
+    if idle_s is not None and idle_s >= IDLE_WARN_S and not defending_walls:
+        out.append("")
+        out.append(f"TEMPO: your plans have not sent the army forward for {idle_s:.0f}s. Unless the enemy is closing "
+                   "in on you right now, take the initiative: advance, flank, threaten their guns or "
+                   + ("climb the walls / go through the open gates" if attacking else "probe their line")
+                   + ". The player came for a fight.")
     if not forts and not naval:  # in a siege the castle is the formation; at sea there are no flanks to ride
         out.extend(formation_section(theirs, ours))
     if terrain is not None and not naval:
