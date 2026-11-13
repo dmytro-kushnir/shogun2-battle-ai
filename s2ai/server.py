@@ -384,11 +384,16 @@ def main() -> None:
         except Exception:  # noqa: BLE001 - a summary must never stop the server
             log.exception("could not summarize battle %s", bid)
 
+    code_commit = git_commit()  # the code this process runs (the repo may move on while it runs)
     while True:
         for msg in link.poll():
             kind = msg.get("type")
             if kind == "battle_start":
                 b = link.battle
+                repo_commit = git_commit()
+                if repo_commit != code_commit:
+                    log.warning("the repository is at %s but this server runs %s: restart it to use the new code",
+                                repo_commit, code_commit)
                 if battle_id != b.id:
                     write_summary(battle_id)  # the last battle was left without a battle_end
                 ai = args.ai_alliance or guess_ai_alliance(msg)
@@ -410,7 +415,7 @@ def main() -> None:
                 # for the history view: which side we commanded, and with what
                 (link.runtime / f"meta-{b.id}.json").write_text(json.dumps({
                     "ai": ai, "general": desc, "commander": args.commander, "opponent": args.opponent,
-                    "condition": args.condition, "commit": git_commit(),
+                    "condition": args.condition, "commit": code_commit,
                     "settings": {k: getattr(args, k) for k in ("model", "effort", "conversation_plans",
                                                                 "min_plan_s", "far_plan_s")}}))
                 board.note(f"battle {b.id} started, commanding alliance {ai}")
