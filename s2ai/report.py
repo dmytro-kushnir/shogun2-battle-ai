@@ -206,7 +206,10 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
     cx, cy = sum(f["x"] for f in keep) / len(keep), sum(f["y"] for f in keep) / len(keep)
     xs, ys = [f["x"] for f in forts], [f["y"] for f in forts]
     out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; the "
-               f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f})."]
+               f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f}).",
+           "  Simplest: task assault for most of your army - each infantry unit climbs its own spread-out section, "
+           "ring after ring, missile units shoot the defenders, cavalry goes in through breaches. The climb points "
+           "below are for climb orders of your own."]
     shooters = [e for e in (theirs or []) if e.fighting_fit and e.missile and e.range]
     if shooters:
         far = max(e.range for e in shooters)
@@ -266,6 +269,14 @@ def character(units: list["U"]) -> str:
         if u.fighting_fit:
             n[role(u)] = n.get(role(u), 0) + 1
     return ", ".join(f"{c} {r}" for r, c in sorted(n.items(), key=lambda kv: -kv[1])) or "none"
+
+
+def siege_side(forts: list[dict], ai: int) -> str | None:
+    """"attack" when most owned castle pieces are the enemy's, "defend" when they are ours, None: no castle."""
+    owners = [f.get("owner") for f in forts if f.get("owner")]
+    if not owners:
+        return None
+    return "attack" if sum(o != ai for o in owners) > len(owners) / 2 else "defend"
 
 
 def batteries(buildings: dict[int, dict] | None, stats: dict[str, dict] | None) -> list[dict]:
@@ -556,17 +567,21 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     # at sea only the coastal batteries matter (they outrange most ships: battle 20261112-192928)
     forts = fortifications(buildings) if not naval else []
     bats = batteries(buildings, unit_stats) if naval else []
-    owners = [f.get("owner") for f in forts if f.get("owner")]
-    attacking = bool(owners) and sum(o != ai for o in owners) > len(owners) / 2
+    side = siege_side(forts, ai)
+    attacking = side == "attack"
     out.extend(assault_section(forts, ai, ours, theirs) if attacking else fort_section(forts, ai))
     out.extend(battery_section(bats, ai, ours))
-    defending_walls = bool(owners) and not attacking
-    if idle_s is not None and idle_s >= IDLE_WARN_S and not defending_walls:
+    if idle_s is not None and idle_s >= IDLE_WARN_S and side != "defend":
         out.append("")
-        out.append(f"TEMPO: your plans have not sent the army forward for {idle_s:.0f}s. Unless the enemy is closing "
-                   "in on you right now, take the initiative: advance, flank, threaten their guns or "
-                   + ("climb the walls / go through the open gates" if attacking else "probe their line")
-                   + ". The player came for a fight.")
+        if attacking:
+            out.append(f"TEMPO: no assault for {idle_s:.0f}s - marching to staging points does not count. Put most "
+                       "of your infantry in a group with task assault NOW (it climbs at spread-out points, ring by "
+                       "ring) with your missile units in it or shooting the defenders above them. Every minute "
+                       "outside the walls is a minute under their fire.")
+        else:
+            out.append(f"TEMPO: your plans have not sent the army forward for {idle_s:.0f}s. Unless the enemy is "
+                       "closing in on you right now, take the initiative: advance, flank, threaten their guns or "
+                       "probe their line. The player came for a fight.")
     if not forts and not naval:  # in a siege the castle is the formation; at sea there are no flanks to ride
         out.extend(formation_section(theirs, ours))
     if terrain is not None and not naval:

@@ -65,9 +65,10 @@ FORWARD_SHARE = 1 / 3   # of the fighting units, for a plan to count as going fo
 FORWARD_M = 60.0        # a move this much closer to the enemy's centre counts as an advance
 
 
-def goes_forward(plan: dict, units, ai: int) -> bool:
+def goes_forward(plan: dict, units, ai: int, siege_attack: bool = False) -> bool:
     """Does the plan send at least FORWARD_SHARE of our fighting units at the enemy (attack, an assault task, or
-    a move that takes the group FORWARD_M closer to the enemy's centre)?"""
+    a move that takes the group FORWARD_M closer to the enemy's centre)? Attacking a castle, moves do not count:
+    siege 20261113-195645 marched columns to staging points for 18 minutes and never climbed."""
     ours = {u.id: u for u in units if u.alliance == ai and u.fighting_fit}
     theirs = [u for u in units if u.alliance != ai and u.fighting_fit]
     if not ours or not theirs:
@@ -78,9 +79,9 @@ def goes_forward(plan: dict, units, ai: int) -> bool:
         members = [ours[i] for i in g.get("units", []) if i in ours]
         if not members:
             continue
-        if g.get("task") in ("attack", "climb", "attack_building", "occupy"):
+        if g.get("task") in ("attack", "climb", "attack_building", "occupy", "assault"):
             n += len(members)
-        elif g.get("task") == "move" and g.get("position"):
+        elif g.get("task") == "move" and g.get("position") and not siege_attack:
             gx, gy = report.centre(members)
             px, py = g["position"][:2]
             if math.hypot(gx - ex, gy - ey) - math.hypot(px - ex, py - ey) >= FORWARD_M:
@@ -288,7 +289,8 @@ class GeneralCommander:
         by_id = {u.id: self.abilities.get(u.type, []) for u in units if u.alliance == self.ai}
         plan, problems = validate(raw, ours, enemies, forts, by_id)
         problems += self.executor.set_plan(plan, units, t)
-        if self.forward_t is None or goes_forward(plan, units, self.ai):
+        siege_attack = report.siege_side(report.fortifications(battle.buildings), self.ai) == "attack"
+        if self.forward_t is None or goes_forward(plan, units, self.ai, siege_attack):
             self.forward_t = t
         self.plan_t = t
         self.plans += 1

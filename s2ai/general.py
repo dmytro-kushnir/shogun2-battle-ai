@@ -118,8 +118,13 @@ How to answer:
   walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
-  trading fire - assault. Any infantry climbs a wall section with task climb (its building id; ninjas climb
-  fastest). Units on the ladders cannot fight back, so first pin the defenders of that stretch with missile fire,
+  trading fire and do not gather at staging points - assault, and keep assaulting. Use task assault for most of
+  the army as soon as it is near the walls (within ~250 m): the executor sends every infantry unit to its own
+  climb point, spread along the wall, over each ring in turn and on to the top; missile units in the group shoot
+  the defenders, which keeps their heads down while the others climb; cavalry waits and rides in through open
+  breaches. Climb with as many units as you can at once - the more places at once, the thinner the defence. Hold
+  back only a small reserve. Any infantry can also climb one section with task climb (its building id; ninjas
+  climb fastest). Units on the ladders cannot fight back, so first pin the defenders of that stretch with missile fire,
   then climb at three or more of the report's climb points at once - one group per point, far apart, on
   different sides if you can - so the defender has to split his men; a single breach is easy to plug. OPEN
   gates and walls (broken) need no climbing: send infantry straight through, then cavalry. attack_building on a

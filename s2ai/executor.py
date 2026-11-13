@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from .report import U, bearing, building_kind, dist
+from .report import U, bearing, building_kind, castle_levels, dist, spread
 
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 SPACING_EXTRA_M = 6.0   # gap between units in a line
@@ -19,6 +19,16 @@ VIA_REACHED_M = 30.0     # a unit counts as through a waypoint this close to it
 MISSILE_RANKS = 2
 MAN_FRONTAGE_M = 1.0
 MISSILE_LINE_MAX_M = 80.0
+
+
+# Assault (siege 20261113-195645: 40 units, 1113 s, not one climb - the general kept marching columns to staging
+# points): each infantry unit of an assault group gets its own climb point, spread out, and climbs ring after ring.
+ASSAULT_SPREAD_M = 45.0  # climb points at least this far apart
+ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a ring's piece is past that ring
+ASSAULT_ON_WALL_M = 20.0 # ... or this close to its piece and ASSAULT_UP_M higher: up on the wall
+ASSAULT_UP_M = 3.0
+ASSAULT_BREACH_PREF = 1.3  # take a breach over climbing when it is at most this much farther than the climb point
+ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
 
 
 def line_width(u: U) -> float | None:
@@ -102,6 +112,8 @@ class Executor:
         self.pullback: dict[int, tuple[float, float, float, int]] = {}  # cavalry unit -> (x, y, until, target)
         self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
         self.shot: dict[int, str] = {}                          # ship -> shot type we last told it to load
+        self.assault_slot: dict[int, int] = {}                  # assaulting unit -> wall piece it climbs
+        self.assault_done: dict[int, set[int]] = {}             # assaulting unit -> castle levels it is past
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -211,6 +223,74 @@ class Executor:
         if not pts:
             return 0.0, 0.0
         return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+    def _assault(self, u: U, g: dict, by_id: dict[int, U], enemies: list[U]) -> dict | None:
+        """Storm the castle: missile units shoot the best defender in reach, cavalry rides for the top through an
+        open breach (or waits), infantry climbs the next ring at its own spread-out wall piece, then the next ring,
+        then occupies the top."""
+        forts = [b for b in self.buildings.values()
+                 if b.get("x") is not None and b.get("owner") and b.get("owner") != self.ai
+                 and building_kind(b.get("name")) in ("wall", "gate", "tower", "keep")]
+        target = self._best_target(u, enemies)
+        if not forts:  # no enemy castle (taken, or a field battle): just attack
+            return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id, "run": True,
+                                                "_sig": f"attack:{target.id}"}
+        forts = [{**b, "kind": building_kind(b.get("name"))} for b in forts]
+        levels = castle_levels(forts)
+        top = [f for f in forts if f["kind"] == "keep"] or levels[-1]
+        cx, cy = sum(f["x"] for f in top) / len(top), sum(f["y"] for f in top) / len(top)
+        occupy = {"cmd": "occupy", "unit": u.id, "x": cx, "y": cy, "run": True,
+                  "_sig": f"occupy:{round(cx / 5)}:{round(cy / 5)}"}
+        broken = lambda f: isinstance(f.get("hp"), (int, float)) and f["hp"] < 0.05
+        members = [by_id[i] for i in g["units"] if i in by_id and by_id[i].fighting_fit]
+        if u.missile and (u.kind == "cav" or u.id in self._assault_shooters(members)):
+            # shoot the defenders while the others climb
+            return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
+                                                "run": False, "_sig": f"attack:{target.id}"}
+        if u.kind == "cav":
+            return occupy if any(broken(f) and f["kind"] in ("gate", "wall") for f in forts) else None
+        done = self.assault_done.setdefault(u.id, set())
+        ud = math.hypot(u.x - cx, u.y - cy)
+        # levels it is past: closer to the centre than that ring's piece next to it, or up on its own piece
+        cur = self.buildings.get(self.assault_slot.get(u.id, -1))
+        for i, lv in enumerate(levels):
+            p = min(lv, key=lambda f: math.hypot(u.x - f["x"], u.y - f["y"]))
+            if ud < math.hypot(p["x"] - cx, p["y"] - cy) - ASSAULT_INSIDE_M:
+                done.add(i)
+            if cur is not None and any(f["id"] == cur["id"] for f in lv) and \
+                    math.hypot(u.x - cur["x"], u.y - cur["y"]) < ASSAULT_ON_WALL_M and \
+                    u.z >= (cur.get("z") or 0) + ASSAULT_UP_M:
+                done.add(i)
+        todo = [i for i in range(len(levels)) if i not in done]
+        if not todo:
+            self.assault_slot.pop(u.id, None)
+            return occupy
+        lv = levels[todo[0]]
+        gaps = [f for f in lv if broken(f) and f["kind"] in ("gate", "wall")]
+        if cur is not None and any(f["id"] == cur["id"] for f in lv) and not broken(cur):
+            b = cur
+        else:
+            walls = [f for f in lv if f["kind"] == "wall" and not broken(f)]
+            if not walls:
+                return occupy  # nothing to climb on this ring: go for the top
+            gx, gy = sum(m.x for m in members) / len(members), sum(m.y for m in members) / len(members)
+            points = spread(walls, lambda f: math.hypot(f["x"] - gx, f["y"] - gy), max(3, len(members)),
+                            ASSAULT_SPREAD_M)
+            taken = [self.assault_slot.get(m.id) for m in members if m.id != u.id]
+            b = min(points, key=lambda f: (taken.count(f["id"]), math.hypot(u.x - f["x"], u.y - f["y"])))
+            self.assault_slot[u.id] = b["id"]
+        # a breach about as near as its own climb point: go through it instead (siege 20261113-195645 had 22)
+        d_climb = math.hypot(u.x - b["x"], u.y - b["y"])
+        if gaps and min(math.hypot(u.x - f["x"], u.y - f["y"]) for f in gaps) <= d_climb * ASSAULT_BREACH_PREF:
+            return occupy
+        return {"cmd": "climb", "unit": u.id, "building": b["id"], "run": True, "_sig": f"climb:{b['id']}"}
+
+    def _assault_shooters(self, members: list[U]) -> set[int]:
+        """The missile infantry of an assault group that stays below and shoots: a third (at least one), the
+        longest-ranged first. The rest climb - in the gunpowder era nearly all infantry has rifles (siege
+        20261113-195645: 22 of 40 units), and riflemen climb and fight with the bayonet."""
+        missile = sorted((m for m in members if m.missile and m.kind == "inf"), key=lambda m: (-m.range, m.id))
+        return {m.id for m in missile[:max(1, round(len(missile) * ASSAULT_SHOOT_SHARE))]} if missile else set()
 
     def _group_of(self, uid: int) -> dict | None:
         if self.plan:
@@ -330,7 +410,7 @@ class Executor:
         near = min(enemies, key=lambda e: dist(u, e)) if enemies else None
         d = dist(u, near) if near else 1e9
         # units manning or scaling a wall stay on it: no reflexes pull them off
-        reflexes = g is not None and g["task"] not in ("garrison", "climb")
+        reflexes = g is not None and g["task"] not in ("garrison", "climb", "assault")
 
         # reflex: missile units step back from melee threats
         if reflexes and g["keep_range_m"] > 0 and u.missile and near and not near.missile and d < g["keep_range_m"]:
@@ -391,6 +471,8 @@ class Executor:
         if task in ("climb", "attack_building"):
             return {"cmd": task, "unit": u.id, "building": g["building"], "run": True,
                     "_sig": f"{task}:{g['building']}"}
+        if task == "assault":
+            return self._assault(u, g, by_id, enemies)
         if task == "occupy":
             x, y = g["position"]
             return {"cmd": "occupy", "unit": u.id, "x": x, "y": y, "run": g["run"],

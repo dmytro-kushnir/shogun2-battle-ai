@@ -261,7 +261,7 @@ def test_siege_assault_and_tempo():
     t2, _ = report.build(static, state, 1, [], None, None, walls2)
     assert "2 levels" in t2 and "top level: climb points" in t2 and "outer level: climb points" in t2, t2
     assert "Your army by role: 1 missile infantry, 1 shock cavalry, 1 spears" in text, text
-    assert "TEMPO" in text and "climb the walls" in text, text
+    assert "TEMPO: no assault" in text and "task assault" in text, text
     for b in walls.values():   # the same castle defended: full list, no tempo nagging
         b["owner"] = 1
     text, _ = report.build(static, state, 1, [], None, None, walls, idle_s=120)
@@ -274,6 +274,52 @@ def test_siege_assault_and_tempo():
                                     {"units": [1, 3], "task": "hold"}]}, units, 1)
     assert goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 300]}]}, units, 1)
     assert not goes_forward({"groups": [{"units": [1, 3], "task": "move", "position": [0, 430]}]}, units, 1)
+
+
+def test_assault():
+    from s2ai.server import goes_forward
+    # a hill castle around (0, 0): outer ring (alt 0) radius 120, inner ring (alt 8) radius 50
+    import math as m
+    blds = {}
+    for i in range(36):
+        a = m.radians(i * 10)
+        blds[i + 1] = {"id": i + 1, "name": f"castle_wall_{i}", "owner": 1, "x": 120 * m.sin(a), "y": 120 * m.cos(a),
+                       "z": 0, "hp": 1}
+    for i in range(12):
+        a = m.radians(i * 30)
+        blds[50 + i] = {"id": 50 + i, "name": f"castle_wall_in_{i}", "owner": 1, "x": 50 * m.sin(a),
+                        "y": 50 * m.cos(a), "z": 8, "hp": 1}
+    inf = [unit(10 + i, 2, -60 + 30 * i, 220, "inf", 160, "Inf_Spear_Yari_Ashigaru") for i in range(4)]
+    bow = unit(20, 2, 0, 260, "inf", 120, "Inf_Missile_Bow_Ashigaru", True)
+    cav = unit(21, 2, 50, 280)
+    foe = unit(30, 1, 0, 60, "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
+    us = inf + [bow, cav, foe]
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    ex.set_plan(plan_of(group([10, 11, 12, 13, 20, 21], task="assault")), us, 0)
+    o = {x["unit"]: x for x in ex.tick(us, 0)[1]}
+    climbs = [o[i]["building"] for i in (10, 11, 12, 13)]
+    assert all(o[i]["cmd"] == "climb" for i in (10, 11, 12, 13)), o
+    assert len(set(climbs)) == 4 and all(b <= 36 for b in climbs), climbs  # four different outer sections
+    pts = [(blds[b]["x"], blds[b]["y"]) for b in climbs]
+    assert all(m.dist(p, q) >= 40 for p in pts for q in pts if p != q), pts  # spread out
+    assert o[20]["cmd"] == "attack" and o[20]["target"] == 30, o            # bows shoot the defenders
+    assert 21 not in o, o                                                   # cavalry: no breach, waits
+    # unit 10 is over the outer ring: it climbs the inner one; unit 11 is past both: it takes the top
+    inf[0].x, inf[0].y, inf[0].z = -40, 80, 2
+    inf[1].x, inf[1].y, inf[1].z = 10, 20, 9
+    o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
+    assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
+    assert o[11]["cmd"] == "occupy", o
+    # a breach: cavalry rides for the top
+    blds[3]["hp"] = 0
+    o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
+    assert o[21]["cmd"] == "occupy", o
+    # TEMPO: attacking a castle, marching does not count, assault does
+    out = [unit(10 + i, 2, -60 + 30 * i, 220, "inf", 160, "Inf_Spear_Yari_Ashigaru") for i in range(4)] + [foe]
+    march = {"groups": [{"units": [10, 11, 12, 13], "task": "move", "position": [0, 130]}]}
+    assert goes_forward(march, out, 2) and not goes_forward(march, out, 2, siege_attack=True)
+    assert goes_forward({"groups": [{"units": [10, 11, 12, 13], "task": "assault"}]}, out, 2, siege_attack=True)
 
 
 def test_missile_line_width():
