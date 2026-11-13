@@ -27,7 +27,6 @@ ASSAULT_SPREAD_M = 45.0  # climb points at least this far apart
 ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a ring's piece is past that ring
 ASSAULT_ON_WALL_M = 20.0 # ... or this close to its piece and ASSAULT_UP_M higher: up on the wall
 ASSAULT_UP_M = 3.0
-ASSAULT_BREACH_PREF = 1.3  # take a breach over climbing when it is at most this much farther than the climb point
 ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
 
 
@@ -224,10 +223,17 @@ class Executor:
             return 0.0, 0.0
         return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
 
+    @staticmethod
+    def _on_piece(u: U, b: dict | None) -> bool:
+        """Up on that wall piece: next to it and higher than its base."""
+        return b is not None and b.get("x") is not None and \
+            math.hypot(u.x - b["x"], u.y - b["y"]) < ASSAULT_ON_WALL_M and u.z >= (b.get("z") or 0) + ASSAULT_UP_M
+
     def _assault(self, u: U, g: dict, by_id: dict[int, U], enemies: list[U]) -> dict | None:
-        """Storm the castle: missile units shoot the best defender in reach, cavalry rides for the top through an
-        open breach (or waits), infantry climbs the next ring at its own spread-out wall piece, then the next ring,
-        then occupies the top."""
+        """Storm the castle: missile units shoot the best defender in reach, cavalry waits (it cannot climb),
+        infantry climbs the next ring at its own spread-out wall piece, then the next ring, then occupies the top.
+        Damaged pieces are not used as ways in: in siege 20261113-201310 units sent through pieces at health 0
+        stopped 40-70 m short of them for over 100 s - the game found no path."""
         forts = [b for b in self.buildings.values()
                  if b.get("x") is not None and b.get("owner") and b.get("owner") != self.ai
                  and building_kind(b.get("name")) in ("wall", "gate", "tower", "keep")]
@@ -248,7 +254,7 @@ class Executor:
             return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
                                                 "run": False, "_sig": f"attack:{target.id}"}
         if u.kind == "cav":
-            return occupy if any(broken(f) and f["kind"] in ("gate", "wall") for f in forts) else None
+            return None  # cannot climb: it waits (and keeps its last order)
         done = self.assault_done.setdefault(u.id, set())
         ud = math.hypot(u.x - cx, u.y - cy)
         # levels it is past: closer to the centre than that ring's piece next to it, or up on its own piece
@@ -257,16 +263,13 @@ class Executor:
             p = min(lv, key=lambda f: math.hypot(u.x - f["x"], u.y - f["y"]))
             if ud < math.hypot(p["x"] - cx, p["y"] - cy) - ASSAULT_INSIDE_M:
                 done.add(i)
-            if cur is not None and any(f["id"] == cur["id"] for f in lv) and \
-                    math.hypot(u.x - cur["x"], u.y - cur["y"]) < ASSAULT_ON_WALL_M and \
-                    u.z >= (cur.get("z") or 0) + ASSAULT_UP_M:
+            if cur is not None and any(f["id"] == cur["id"] for f in lv) and self._on_piece(u, cur):
                 done.add(i)
         todo = [i for i in range(len(levels)) if i not in done]
         if not todo:
             self.assault_slot.pop(u.id, None)
             return occupy
         lv = levels[todo[0]]
-        gaps = [f for f in lv if broken(f) and f["kind"] in ("gate", "wall")]
         if cur is not None and any(f["id"] == cur["id"] for f in lv) and not broken(cur):
             b = cur
         else:
@@ -279,10 +282,6 @@ class Executor:
             taken = [self.assault_slot.get(m.id) for m in members if m.id != u.id]
             b = min(points, key=lambda f: (taken.count(f["id"]), math.hypot(u.x - f["x"], u.y - f["y"])))
             self.assault_slot[u.id] = b["id"]
-        # a breach about as near as its own climb point: go through it instead (siege 20261113-195645 had 22)
-        d_climb = math.hypot(u.x - b["x"], u.y - b["y"])
-        if gaps and min(math.hypot(u.x - f["x"], u.y - f["y"]) for f in gaps) <= d_climb * ASSAULT_BREACH_PREF:
-            return occupy
         return {"cmd": "climb", "unit": u.id, "building": b["id"], "run": True, "_sig": f"climb:{b['id']}"}
 
     def _assault_shooters(self, members: list[U]) -> set[int]:
@@ -314,7 +313,9 @@ class Executor:
                 continue
             sig = want.pop("_sig")
             last = self.issued.get(u.id)
-            stale = last is not None and t - last[1] > REISSUE_S and not u.moving
+            # a climb is never repeated: a unit that stands still on the wall it climbed is not stuck, and a repeat
+            # sent it down and up again (siege 20261113-201310: altitude 12 -> 5 -> 12 for 250 s under fire)
+            stale = last is not None and t - last[1] > REISSUE_S and not u.moving and want["cmd"] != "climb"
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
@@ -468,6 +469,8 @@ class Executor:
                 return None  # inside
             return {"cmd": "garrison", "unit": u.id, "building": g["building"], "run": True,
                     "_sig": f"garrison:{g['building']}"}
+        if task == "climb" and self._on_piece(u, self.buildings.get(g["building"])):
+            return None  # up on the wall: it fights there until the general sends it on
         if task in ("climb", "attack_building"):
             return {"cmd": task, "unit": u.id, "building": g["building"], "run": True,
                     "_sig": f"{task}:{g['building']}"}

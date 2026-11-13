@@ -247,7 +247,7 @@ def test_siege_assault_and_tempo():
     walls[38] = {"id": 38, "name": "castle_gate_01", "owner": 2, "x": 66, "y": 0, "hp": 1, "mil": True, "cap": 68}
     text, units = report.build(static, state, 1, [], None, None, walls, idle_s=120)
     assert "SIEGE - YOU ATTACK" in text and "FORTIFICATIONS" not in text, text
-    assert "OPEN" in text and "b40   gate" in text and "BROKEN" in text, text
+    assert "1 gates / wall pieces are damaged" in text and "cannot march through" in text, text
     # climb points are spread out (walls here are 20 m apart in a row): 5 points, 60 m+ apart
     pts = [ln for ln in text.splitlines() if " wall  at" in ln]
     assert len(pts) == 5, text
@@ -311,10 +311,22 @@ def test_assault():
     o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
     assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
     assert o[11]["cmd"] == "occupy", o
-    # a breach: cavalry rides for the top
+    # damaged pieces are no way in (siege 201310): cavalry still waits, nobody is sent "through"
     blds[3]["hp"] = 0
     o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
-    assert o[21]["cmd"] == "occupy", o
+    assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
+    # a unit up on the wall it climbed is not sent up again (siege 201310: 12 -> 5 -> 12 m for 250 s)
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    w = blds[1]
+    climber = unit(40, 2, w["x"], w["y"] + 30, "inf", 160, "Inf_Spear_Yari_Ashigaru")
+    raw = plan_of(group([40], task="climb"))
+    raw["groups"][0]["building"] = 1
+    ex.set_plan(raw, [climber, foe], 0)
+    assert ex.tick([climber, foe], 0)[1][0]["cmd"] == "climb"
+    assert ex.tick([climber, foe], 30)[1] == []          # standing at the ladder: no repeat
+    climber.y, climber.z = w["y"] + 2, 7                  # up on the wall
+    assert ex.tick([climber, foe], 60)[1] == []
     # TEMPO: attacking a castle, marching does not count, assault does
     out = [unit(10 + i, 2, -60 + 30 * i, 220, "inf", 160, "Inf_Spear_Yari_Ashigaru") for i in range(4)] + [foe]
     march = {"groups": [{"units": [10, 11, 12, 13], "task": "move", "position": [0, 130]}]}

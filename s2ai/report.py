@@ -208,8 +208,8 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
     out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; the "
                f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f}).",
            "  Simplest: task assault for most of your army - each infantry unit climbs its own spread-out section, "
-           "ring after ring, missile units shoot the defenders, cavalry goes in through breaches. The climb points "
-           "below are for climb orders of your own."]
+           "ring after ring, a third of the missile units shoot the defenders, cavalry waits. The climb points "
+           "below are for climb orders of your own; a unit that has climbed stays on its wall until you send it on."]
     shooters = [e for e in (theirs or []) if e.fighting_fit and e.missile and e.range]
     if shooters:
         far = max(e.range for e in shooters)
@@ -217,10 +217,11 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
                    "from them (walls and towers add height and reach).")
     line = lambda f, extra="": (f"    b{f['id']:<4} {f['kind']:<5} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:3.0f}, "
                                 f"{near(f):4.0f} m from your army{extra}{' GARRISONED' if f.get('gar') else ''}")
-    gaps = sorted([f for f in forts if broken(f) and f["kind"] in ("gate", "wall")], key=near)
+    gaps = [f for f in forts if broken(f) and f["kind"] in ("gate", "wall")]
     if gaps:
-        out.append("  OPEN (broken gates / walls - march or ride straight in):")
-        out.extend(line(f, " BROKEN") for f in gaps[:8])
+        # siege 20261113-201310: units sent through pieces at health 0 stopped short - no path in
+        out.append(f"  {len(gaps)} gates / wall pieces are damaged (health 0), but units cannot march through them: "
+                   "climb.")
     if len(levels) > 1:
         out.append(f"  The castle has {len(levels)} levels (rings of walls), outer first: "
                    + ", ".join(f"alt {min(f.get('z') or 0 for f in lv):.0f}-{max(f.get('z') or 0 for f in lv):.0f}"

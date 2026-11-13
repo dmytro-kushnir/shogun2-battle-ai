@@ -120,19 +120,20 @@ How to answer:
   ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
   trading fire and do not gather at staging points - assault, and keep assaulting. Use task assault for most of
   the army as soon as it is near the walls (within ~250 m): the executor sends every infantry unit to its own
-  climb point, spread along the wall, over each ring in turn and on to the top; missile units in the group shoot
-  the defenders, which keeps their heads down while the others climb; cavalry waits and rides in through open
-  breaches. Climb with as many units as you can at once - the more places at once, the thinner the defence. Hold
+  climb point, spread along the wall, over each ring in turn and on to the top; a third of the missile units in
+  the group stay below and shoot the defenders, which keeps their heads down while the others climb; cavalry
+  waits. Climb with as many units as you can at once - the more places at once, the thinner the defence. Hold
   back only a small reserve. Any infantry can also climb one section with task climb (its building id; ninjas
-  climb fastest). Units on the ladders cannot fight back, so first pin the defenders of that stretch with missile fire,
-  then climb at three or more of the report's climb points at once - one group per point, far apart, on
-  different sides if you can - so the defender has to split his men; a single breach is easy to plug. OPEN
-  gates and walls (broken) need no climbing: send infantry straight through, then cavalry. attack_building on a
-  shut gate is slow - climbing next to it is usually faster. Hill castles have several levels: once over the
-  outer wall, climb the next ring at once (the report lists climb points per level) - do not stop between rings
-  where the upper walls shoot down at you. Keep going to the top level and occupy it.
-  Cavalry cannot climb or dismount: it waits beyond the defenders' missile range (the report gives it), rides
-  down defenders who sally out or run, and goes in through open gates once the way is clear.
+  climb fastest); once up it stays on that wall until you give it its next task.
+  Damaged walls and gates (health 0) are NOT open: units sent through them stop outside, under fire. Climb.
+  Units on the ladders cannot fight back, so pin the defenders of that stretch with missile fire, and climb at
+  three or more points at once - far apart, on different sides if you can - so the defender has to split his
+  men; a single foothold is easy to throw back. attack_building on a shut gate is slow - climbing next to it is
+  usually faster. Hill castles have several levels: once over the outer wall, climb the next ring at once (the
+  report lists climb points per level) - do not stop between rings where the upper walls shoot down at you. Keep
+  going to the top level and occupy it.
+  Cavalry cannot climb or dismount: it waits beyond the defenders' missile range (the report gives it) and rides
+  down defenders who sally out or run.
 - Routes: `via` = up to 3 waypoints the group goes through before its task. Use it to go AROUND an enemy line
   instead of through its fire: the ENEMY FORMATION section gives flank routes that stay out of its small-arms
   range. A unit that is "in range of enemy ..." is being shot at, or can be.
