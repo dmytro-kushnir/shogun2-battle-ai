@@ -45,15 +45,19 @@ FAR_M = 300.0                 # armies this far apart: plan at most every --far-
 
 
 def guess_ai_alliance(start: dict) -> int:
-    """The player's army carries the player's difficulty as handicap (Sekigahara: player -2, every AI army +2).
-    So the AI side is the alliance whose armies have the highest handicap; ties -> alliance 2."""
-    best: dict[int, float] = {}
-    for a in start["armies"]:
-        h = a.get("handicap")
-        if h is not None:
-            best[a["alliance"]] = max(best.get(a["alliance"], -99), h)
-    if len(set(best.values())) > 1:
-        return max(best, key=best.get)
+    """The player's army carries the player's difficulty as handicap, every AI army the AI's (Sekigahara: player
+    -2, every AI army +2). So the player's army is the one whose handicap no other army shares (with only two
+    armies: the lower one), and the AI side is the other alliance - also when an AI ally fights in the player's
+    alliance (campaign battle 20261113-185839: enemy +2, player -2, the player's allied army +2). Unknown -> 2."""
+    armies = [a for a in start["armies"] if a.get("handicap") is not None]
+    hs = [a["handicap"] for a in armies]
+    human = [a for a in armies if hs.count(a["handicap"]) == 1]
+    if len(human) == 2 and len(armies) == 2:
+        human = [min(armies, key=lambda a: a["handicap"])]
+    if len(human) == 1:
+        others = {a["alliance"] for a in start["armies"]} - {human[0]["alliance"]}
+        if len(others) == 1:
+            return others.pop()
     return 2
 
 

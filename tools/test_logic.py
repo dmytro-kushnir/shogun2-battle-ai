@@ -229,6 +229,18 @@ def test_coastal_batteries():
     assert "FORTIFICATIONS" not in text, text   # at sea: no siege section
 
 
+def test_ai_alliance():
+    from s2ai.server import guess_ai_alliance
+    arm = lambda *a: {"armies": [{"alliance": al, "army": n, "handicap": h} for al, n, h in a]}
+    assert guess_ai_alliance(arm((1, 1, 2), (2, 1, -2))) == 1
+    assert guess_ai_alliance(arm((1, 1, -2), (2, 1, 2))) == 2
+    # Sekigahara: the player and two allied AI armies against two AI armies
+    assert guess_ai_alliance(arm((1, 1, -2), (1, 2, 2), (1, 3, 2), (2, 1, 2), (2, 2, 2))) == 2
+    # campaign 20261113-185839: the player's AI ally (+2) made a tie, and the general took the player's army
+    assert guess_ai_alliance(arm((1, 1, 2), (2, 1, -2), (2, 2, 2))) == 1
+    assert guess_ai_alliance(arm((1, 1, 0), (2, 1, 0))) == 2   # nothing to go by
+
+
 def test_gameai_opponent():
     from types import SimpleNamespace
     from s2ai.server import GameAIOpponent, NoCommander
