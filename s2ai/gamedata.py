@@ -242,7 +242,7 @@ assert len(F) == len(STATS_LAYOUT)
 TRAITS = {"disciplined": "disciplined", "impetuous": "impetuous", "scares_horses": "scares horses",
           "inspire": "inspires", "fatigue_resistant": "fatigue resistant", "stakes": "can place stakes",
           "can_stalk": "stealth", "ap_missile": "armour-piercing missiles", "ap_melee": "armour-piercing melee",
-          "bulletproof": "bulletproof"}
+          "bulletproof": "bulletproof", "can_dismount": "can dismount"}
 
 
 def read_rows(b: bytes, layout: str) -> list[list]:
@@ -414,7 +414,7 @@ def battery_stats(stats: dict, gun_shots: dict, projectiles: dict) -> dict[str, 
     return out
 
 
-CACHE_VERSION = 6
+CACHE_VERSION = 7
 SHIPS = "db\\unit_stats_naval_tables\\unit_stats_naval"
 GUN_SHOTS = "db\\gun_type_to_projectiles_tables\\gun_type_to_projectiles"
 PROJECTILES = "db\\projectiles_tables\\projectiles"

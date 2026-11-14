@@ -315,6 +315,12 @@ def test_assault():
     blds[3]["hp"] = 0                           # damaged pieces are no way in (siege 201310)
     o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
     assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
+    # cavalry that can dismount (the player's button) is told to, once (bridge probe); other cavalry just waits
+    ex3 = Executor(2, TIMINGS, {**STATS, cav.type: {**STATS.get(cav.type, {}), "traits": ["can dismount"]}})
+    ex3.set_buildings(blds)
+    ex3.set_plan(plan_of(group([21], task="assault")), us, 0)
+    assert ex3.tick(us, 0)[1] == [{"cmd": "dismount", "unit": 21}]
+    assert ex3.tick(us, 30)[1] == []
     blds[3]["hp"] = 1
     for u, (x, y, z) in zip(inf[:2], saved):
         u.x, u.y, u.z = x, y, z

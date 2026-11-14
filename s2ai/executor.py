@@ -125,6 +125,7 @@ class Executor:
         self.group_issued: dict[str, tuple[str, float]] = {}    # game-AI group -> (signature, battle time sent)
         self.assault_slot: dict[int, int] = {}                  # assaulting unit -> wall piece it climbs
         self.assault_done: dict[int, set[int]] = {}             # assaulting unit -> castle levels it is past
+        self.dismount_sent: set[int] = set()                     # cavalry told to dismount (once each)
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -266,6 +267,12 @@ class Executor:
             return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
                                                 "run": False, "_sig": f"attack:{target.id}"}
         if u.kind == "cav":
+            # 89 unit types can dismount (unit_stats_land can_dismount; the player's button) and then climb like
+            # infantry. The script API has no dismount command: the bridge tries the likely ways and logs which
+            # the game takes (probe). Once per unit; until it is known to work, the unit otherwise waits.
+            if "can dismount" in (self.stats.get(u.type) or {}).get("traits", []) and u.id not in self.dismount_sent:
+                self.dismount_sent.add(u.id)
+                return {"cmd": "dismount", "unit": u.id, "_sig": "dismount"}
             return None  # cannot climb: it waits (and keeps its last order)
         done = self.assault_done.setdefault(u.id, set())
         ud = math.hypot(u.x - cx, u.y - cy)

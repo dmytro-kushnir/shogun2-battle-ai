@@ -462,6 +462,17 @@ def main() -> bool:
                 link.poll()
                 if not any(c == "planner a2 remove" for c in list(g.MOCK_CALLS.values())[n_calls:]):
                     problems.append("a unit taken back from a group planner was not removed from it")
+                # dismount probe: whatever the engine says, the order must not fail, and the check runs later
+                link.send(ours2, [{"cmd": "dismount", "unit": ours2[0]}])
+                tick()
+                link.poll()
+                errs = link.battle.applied[-1]["errors"] if link.battle.applied else []
+                if errs:
+                    problems.append(f"dismount probe failed: {errs}")
+                for _ in range(12):
+                    tick()
+                if g.S2AI_BRIDGE.dismount_check and len(g.S2AI_BRIDGE.dismount_check) > 0:
+                    problems.append("dismount probe result never logged")
 
             g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")

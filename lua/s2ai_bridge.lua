@@ -332,6 +332,8 @@ end
 
 -- ------------------------------------------------------------------ orders
 
+local DISMOUNT_WAYS -- the dismount probe's candidates, below HANDLERS
+
 local HANDLERS = {
 	move = function(uc, o)
 		local run = o.run == true
@@ -437,6 +439,42 @@ local SHIP_HANDLERS = {
 	fire_at_will = function(uc, o) uc:fire_at_will(o.on ~= false) end,
 	halt = function(uc) uc:halt() end,
 }
+
+-- PROBE: cavalry that can dismount (the player's button) - the script API has no dismount command. Each unit told
+-- to dismount tries one of the likely ways (DISMOUNT_WAYS[B.dismount_way]); ~5 s later the tick logs whether it is
+-- still cavalry, and if it is, the next unit tries the next way.
+HANDLERS.dismount = function(uc, o)
+	local e = B.units[o.unit]
+	B.dismount_way = B.dismount_way or 1
+	local way = DISMOUNT_WAYS[B.dismount_way]
+	if not way then return end -- every way tried, none worked
+	local ok, err = pcall(way[2], uc)
+	log("dismount probe: unit " .. tostring(o.unit) .. " (cavalry: " .. tostring(call(e.unit, "is_cavalry"))
+		.. ") " .. way[1] .. (ok and " accepted" or (" refused: " .. tostring(err))))
+	B.dismount_check = B.dismount_check or {}
+	B.dismount_check[o.unit] = { due = B.tick + 10, way = B.dismount_way, accepted = ok }
+end
+
+DISMOUNT_WAYS = { -- assigns the local declared above HANDLERS
+	{ "perform_special_ability(\"dismount\")", function(uc) uc:perform_special_ability("dismount") end },
+	{ "change_formation(\"dismount\")", function(uc) uc:change_formation("dismount") end },
+	{ "change_formation(\"dismounted\")", function(uc) uc:change_formation("dismounted") end },
+	{ "perform_special_ability(\"dismount_capture\")", function(uc) uc:perform_special_ability("dismount_capture") end },
+}
+
+local function check_dismounts()
+	for id, c in pairs(B.dismount_check or {}) do
+		if B.tick >= c.due then
+			B.dismount_check[id] = nil
+			local e = B.units[id]
+			local cav = e and call(e.unit, "is_cavalry")
+			local way = DISMOUNT_WAYS[c.way]
+			log("dismount probe result: unit " .. tostring(id) .. " after " .. (way and way[1] or "?") .. ": cavalry "
+				.. tostring(cav) .. (cav == false and " -> DISMOUNTED" or ""))
+			if cav ~= false and B.dismount_way == c.way then B.dismount_way = c.way + 1 end
+		end
+	end
+end
 
 -- The game's own tactical AI for a whole alliance, as the historical battles script it
 -- (Alliance:create_ai_unit_planner(), add_units, attack_unit / defend_position). For research runs the human's
@@ -689,6 +727,7 @@ function S2AI_Bridge_Tick()
 		if B.tick == 1 then log("first tick: the battle timer runs") end
 		local known = B.units or {}
 		scan()
+		check_dismounts()
 		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
 		-- or the server cannot tell what they are
 		local added = {}
