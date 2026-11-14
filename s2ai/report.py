@@ -272,6 +272,18 @@ def character(units: list["U"]) -> str:
     return ", ".join(f"{c} {r}" for r, c in sorted(n.items(), key=lambda kv: -kv[1])) or "none"
 
 
+ON_CASTLE_NEAR_M = 20.0  # a unit this close to a castle piece ...
+ON_CASTLE_UP_M = 3.0     # ... and this much higher than its base is up on it
+
+
+def on_castle(u: "U", pieces: list[dict]) -> bool:
+    """Is the unit up on the castle - on a wall, tower or gate piece, or garrisoned? Cavalry cannot reach it."""
+    if u.garrisoned:
+        return True
+    return any(math.hypot(u.x - b["x"], u.y - b["y"]) < ON_CASTLE_NEAR_M and u.z >= (b.get("z") or 0) + ON_CASTLE_UP_M
+               for b in pieces if b.get("x") is not None)
+
+
 def siege_side(forts: list[dict], ai: int) -> str | None:
     """"attack" when most owned castle pieces are the enemy's, "defend" when they are ours, None: no castle."""
     owners = [f.get("owner") for f in forts if f.get("owner")]
@@ -604,8 +616,10 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
         out.extend(f"    {a}: {ABILITIES.get(a, '')}" for a in ours_ab)
     out.append("")
     out.append("ENEMY UNITS (closest to your army first):")
+    their_forts = [f for f in forts if f.get("owner") and f["owner"] != ai] if attacking else []
     for e in sorted(theirs, key=lambda e: math.hypot(e.x - ox, e.y - oy)):
-        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False, extra=mtag(e)))
+        wall = " | ON THE CASTLE (cavalry cannot reach it)" if their_forts and on_castle(e, their_forts) else ""
+        out.append(unit_line(e, [u for u in ours if u.fighting_fit], show_nearest=False, extra=mtag(e) + wall))
     if morale is not None:
         out.append("")
         out.append("(morale risk: an estimate from losses, flanks, local numbers, the general and routing friends - "

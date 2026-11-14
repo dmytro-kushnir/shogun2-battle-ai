@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from .report import U, bearing, building_kind, castle_levels, dist, spread
+from .report import U, bearing, building_kind, castle_levels, dist, on_castle, spread
 
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 CLIMB_RETRY_S = 20.0    # ... a climb, when the unit stands still and is not up on its wall piece
@@ -31,6 +31,8 @@ ON_WALL_UP_M = 3.0
 ASSAULT_SPREAD_M = 45.0  # climb points at least this far apart
 ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a ring's piece is past that ring
 ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
+ASSAULT_SHARE_PENALTY_M = 25.0  # inner rings: a piece another unit climbs counts as this much farther
+CLIMB_MAX_SENDS = 4      # climb orders to one piece before the unit gives it up and tries another
 
 # Tasks the game's own tactical AI carries out for a group (one planner per group in the bridge): the general
 # chooses units and objective, the game does the pathing, climbing and fighting. Siege 20261114-101605: four
@@ -126,6 +128,8 @@ class Executor:
         self.assault_slot: dict[int, int] = {}                  # assaulting unit -> wall piece it climbs
         self.assault_done: dict[int, set[int]] = {}             # assaulting unit -> castle levels it is past
         self.dismount_sent: set[int] = set()                     # cavalry told to dismount (once each)
+        self.climb_sends: dict[tuple[int, int], int] = {}       # (unit, wall piece) -> climb orders sent
+        self.climb_failed: dict[int, set[int]] = {}             # unit -> pieces it gave up on
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -267,13 +271,7 @@ class Executor:
             return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
                                                 "run": False, "_sig": f"attack:{target.id}"}
         if u.kind == "cav":
-            # 89 unit types can dismount (unit_stats_land can_dismount; the player's button) and then climb like
-            # infantry. The script API has no dismount command: the bridge tries the likely ways and logs which
-            # the game takes (probe). Once per unit; until it is known to work, the unit otherwise waits.
-            if "can dismount" in (self.stats.get(u.type) or {}).get("traits", []) and u.id not in self.dismount_sent:
-                self.dismount_sent.add(u.id)
-                return {"cmd": "dismount", "unit": u.id, "_sig": "dismount"}
-            return None  # cannot climb: it waits (and keeps its last order)
+            return self._dismount(u)  # cannot climb: it tries to dismount once, otherwise waits
         done = self.assault_done.setdefault(u.id, set())
         ud = math.hypot(u.x - cx, u.y - cy)
         # levels it is past: closer to the centre than that ring's piece next to it, or up on its own piece
@@ -289,19 +287,48 @@ class Executor:
             self.assault_slot.pop(u.id, None)
             return occupy
         lv = levels[todo[0]]
-        if cur is not None and any(f["id"] == cur["id"] for f in lv) and not broken(cur):
+        failed = self.climb_failed.setdefault(u.id, set())
+        if cur is not None and self.climb_sends.get((u.id, cur["id"]), 0) >= CLIMB_MAX_SENDS:
+            failed.add(cur["id"])  # sent there again and again without getting up: try another piece
+        if cur is not None and any(f["id"] == cur["id"] for f in lv) and not broken(cur) and cur["id"] not in failed:
             b = cur
         else:
-            walls = [f for f in lv if f["kind"] == "wall" and not broken(f)]
+            walls = [f for f in lv if f["kind"] == "wall" and not broken(f) and f["id"] not in failed]
             if not walls:
-                return occupy  # nothing to climb on this ring: go for the top
-            gx, gy = sum(m.x for m in members) / len(members), sum(m.y for m in members) / len(members)
-            points = spread(walls, lambda f: math.hypot(f["x"] - gx, f["y"] - gy), max(3, len(members)),
-                            ASSAULT_SPREAD_M)
+                return occupy  # nothing (left) to climb on this ring: go for the top
             taken = [self.assault_slot.get(m.id) for m in members if m.id != u.id]
-            b = min(points, key=lambda f: (taken.count(f["id"]), math.hypot(u.x - f["x"], u.y - f["y"])))
+            if todo[0] == 0:
+                # outer ring: points spread along the side the group comes from, shared out
+                gx, gy = sum(m.x for m in members) / len(members), sum(m.y for m in members) / len(members)
+                points = spread(walls, lambda f: math.hypot(f["x"] - gx, f["y"] - gy), max(3, len(members)),
+                                ASSAULT_SPREAD_M)
+                b = min(points, key=lambda f: (taken.count(f["id"]), math.hypot(u.x - f["x"], u.y - f["y"])))
+            else:
+                # inner rings: a piece near the unit (siege 20261114-103844: points chosen for the group sent units
+                # across the castle, 10-15 tries each), others' pieces cost a little extra so they spread
+                b = min(walls, key=lambda f: math.hypot(u.x - f["x"], u.y - f["y"])
+                        + ASSAULT_SHARE_PENALTY_M * taken.count(f["id"]))
             self.assault_slot[u.id] = b["id"]
         return {"cmd": "climb", "unit": u.id, "building": b["id"], "run": True, "_sig": f"climb:{b['id']}"}
+
+    def _dismount(self, u: U) -> dict | None:
+        """Cavalry that can dismount (89 unit types, unit_stats_land can_dismount; the player's button) and could
+        then climb like infantry. The script API has no dismount command: the bridge tries the likely ways and
+        logs which the game takes (probe). Once per unit; None when already sent or the unit cannot dismount."""
+        if "can dismount" in (self.stats.get(u.type) or {}).get("traits", []) and u.id not in self.dismount_sent:
+            self.dismount_sent.add(u.id)
+            return {"cmd": "dismount", "unit": u.id, "_sig": "dismount"}
+        return None
+
+    def _enemy_forts(self) -> list[dict]:
+        return [b for b in self.buildings.values()
+                if b.get("x") is not None and b.get("owner") and b.get("owner") != self.ai
+                and building_kind(b.get("name")) in ("wall", "gate", "tower", "keep")]
+
+    def _on_castle(self, e: U) -> bool:
+        """An enemy up on its castle (on a wall, tower or gate, or garrisoned): cavalry cannot reach it (siege
+        20261114-103844: cavalry sent at gunners on a wall, then at a gate)."""
+        return on_castle(e, self._enemy_forts())
 
     def _assault_shooters(self, members: list[U]) -> set[int]:
         """The missile infantry of an assault group that stays below and shoots: a third (at least one), the
@@ -380,6 +407,9 @@ class Executor:
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
+                if want["cmd"] == "climb":
+                    k = (u.id, want["building"])
+                    self.climb_sends[k] = self.climb_sends.get(k, 0) + 1
         orders.extend(self._game_ai_orders(ours, enemies, t))
         # ships: load the group's shot type when it changes (the game does not report the loaded one)
         for u in ours:
@@ -502,6 +532,23 @@ class Executor:
             if step is not None:
                 return step
         task = g["task"]
+        if u.kind == "cav" and task in ("attack", "climb", "attack_building") and self._enemy_forts():
+            # attacking a castle, cavalry cannot climb, break gates or reach units up on the castle: it tries to
+            # dismount once (probe), otherwise it takes an enemy on the ground or waits
+            wanted = by_id.get(g["target"]) if task == "attack" else None
+            if task != "attack" or (wanted is not None and self._on_castle(wanted)):
+                d = self._dismount(u)
+                if d is not None:
+                    return d
+                if task != "attack":
+                    return None
+            if task == "attack":
+                ground = [e for e in enemies if not self._on_castle(e)]
+                target = wanted if wanted is not None and wanted.fighting_fit and wanted in ground else \
+                    self._best_target(u, ground)
+                return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
+                                                    "run": g["run"] or dist(u, target) < 80,
+                                                    "_sig": f"attack:{target.id}"}
         if task == "attack":
             target = by_id.get(g["target"])
             if target is None or not target.fighting_fit:

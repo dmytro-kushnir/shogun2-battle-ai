@@ -321,6 +321,31 @@ def test_assault():
     ex3.set_plan(plan_of(group([21], task="assault")), us, 0)
     assert ex3.tick(us, 0)[1] == [{"cmd": "dismount", "unit": 21}]
     assert ex3.tick(us, 30)[1] == []
+    # cavalry sent at a defender up on a wall (siege 103844): dismount once, then a target on the ground or wait
+    up = unit(31, 1, blds[1]["x"], blds[1]["y"], "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
+    up.z = 6
+    ground = unit(32, 1, 0, 160, "inf", 100, "Inf_Spear_Yari_Ashigaru")
+    field = [cav, up, ground]
+    ex4 = Executor(2, TIMINGS, {**STATS, cav.type: {**STATS.get(cav.type, {}), "traits": ["can dismount"]}})
+    ex4.set_buildings(blds)
+    ex4.set_plan(plan_of(group([21], target=31)), field, 0)
+    assert ex4.tick(field, 0)[1] == [{"cmd": "dismount", "unit": 21}]
+    o = ex4.tick(field, 1)[1]
+    assert o and o[0]["cmd"] == "attack" and o[0]["target"] == 32, o       # the one on the ground
+    raw = plan_of(group([21], task="attack_building"))
+    raw["groups"][0]["building"] = 1
+    ex4.set_plan(raw, field, 2)
+    assert ex4.tick(field, 2)[1] == []                                       # no gate battering on horseback
+    # climb points: a unit that does not get up a piece after CLIMB_MAX_SENDS tries another one
+    ex5 = Executor(2, TIMINGS, STATS)
+    ex5.set_buildings(blds)
+    ex5.set_plan(plan_of(group([10], task="assault")), us, 0)
+    first = ex5.tick(us, 0)[1][0]["building"]
+    sent = [first]
+    for k in range(1, 8):
+        o = ex5.tick(us, 25 * k)[1]
+        sent += [x["building"] for x in o if x["cmd"] == "climb"]
+    assert sent.count(first) == 4 and len(set(sent)) >= 2, sent
     blds[3]["hp"] = 1
     for u, (x, y, z) in zip(inf[:2], saved):
         u.x, u.y, u.z = x, y, z
