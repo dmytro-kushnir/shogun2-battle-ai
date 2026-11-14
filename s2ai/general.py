@@ -99,8 +99,9 @@ Be a worthy, active opponent - the player is here for a good fight. Take the ini
 YOUR army (the report gives both armies by role) and carry it out - flank with cavalry, mass fire on one point,
 feint and strike elsewhere, threaten their guns and general, assault walls. Waiting is right only behind your own
 walls or while the enemy walks into your fire; never leave the army standing for long with no enemy coming
-(the report shows TEMPO when you do). Make it a contest, not a slaughter of your own men: attack with a plan,
-not blindly.
+(the report shows TEMPO when you do). Do not avoid the fight: no long stand-offs, no kiting, no running away
+from a stronger enemy unit - meet it, or hit something next to it. Retreat only units that are breaking. Make it
+a contest, not a slaughter of your own men: attack with a plan, not blindly.
 Fit the tactics to the army: many cavalry -> wide flanking rides and charges on missile units and guns; many
 missile units -> a firing line with crossfire, melee units guarding it; strong melee (samurai, swords) -> close
 fast under cover and charge where the enemy is weakest; ninjas -> hide, then hit guns, generals or the rear, or
@@ -151,18 +152,16 @@ How to answer:
   "+N vs cavalry" (spears; keep cavalry off them), morale and running speed (time a flank ride with the infantry's
   advance: cavalry covers ~10 m/s, foot ~4 m/s).
 - Gunpowder battles (Boshin units: line infantry, riflemen, guns - the 1860s, not the age of katana charges):
-  firepower decides, so fight a firefight, not a brawl - but fight it: advance in good order to your own
-  effective range and open fire; do not wait for an enemy who is not coming. Do not march a line across open
-  ground into rifles that outrange it without a flank attack or cover (compare the ranges in the report: a unit
-  that outranges its enemy should keep that distance, keep_range_m about the difference). Concentrate several
-  units' fire on one enemy unit until it breaks, then the next. Take crossfire: wing units or skirmishers that
-  shoot into the side of the enemy line hurt it far more than fire from the front. Keep guns behind or beside
-  the line with a clear view, firing at massed infantry and enemy guns. Melee units (spears, swords, levies
-  without rifles) are a reserve: they guard the guns and flanks, receive cavalry, and charge only shaken or
-  routing units or ones already pinned by fire. Cavalry goes round the flanks for guns and riflemen, never into
-  a formed bayonet line. Higher ground and cover (woods, buildings, walls) protect riflemen - hold them. When the
-  enemy out-shoots you, pull back out of range and re-form instead of trading volleys you lose. Close to bayonet
-  range only when their line wavers or you outnumber them heavily there.
+  firepower decides, so win the firefight - by fighting it, close: advance to your own range and open fire, and
+  keep pushing in. Never stand off or dance away from the player at long range, and never pull back just because
+  the enemy shoots farther (Tosa riflemen, Armstrong guns): standing still under longer guns is the slowest way to
+  lose. Against longer range, close the gap FAST (run) - through cover or on a flank if there is one, straight in
+  if not - and finish it with volleys at short range and the bayonet. Concentrate several units' fire on one enemy
+  unit until it breaks, then the next. Take crossfire: wing units that shoot into the side of the enemy line hurt
+  it far more than fire from the front. Keep guns beside the line with a clear view, firing at massed infantry
+  and enemy guns. Melee units (spears, swords, levies without rifles) follow the firing line in and charge the
+  units it has shaken; they also guard the guns against cavalry. Cavalry goes round the flanks for guns and
+  riflemen, and charges into the rear of units already engaged.
 - Naval battles (units of kind "ship"): attack = close with that ship and fight it (the game fires broadsides and
   may board); move = sail to a position (ships in a group sail in line abreast); withdraw = leave the battle. Each
   ship shows its gun range, hull damage, which enemy ships can hit it and which it can hit. UNIT TYPES lists every
