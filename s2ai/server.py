@@ -79,7 +79,7 @@ def goes_forward(plan: dict, units, ai: int, siege_attack: bool = False) -> bool
         members = [ours[i] for i in g.get("units", []) if i in ours]
         if not members:
             continue
-        if g.get("task") in ("attack", "climb", "attack_building", "occupy", "assault"):
+        if g.get("task") in ("attack", "climb", "attack_building", "occupy", "assault", "ai_assault"):
             n += len(members)
         elif g.get("task") == "move" and g.get("position") and not siege_attack:
             gx, gy = report.centre(members)

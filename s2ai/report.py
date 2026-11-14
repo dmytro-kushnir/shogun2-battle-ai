@@ -207,9 +207,9 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
     xs, ys = [f["x"] for f in forts], [f["y"] for f in forts]
     out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; the "
                f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f}).",
-           "  Simplest: task assault - the game's own battle AI storms the castle with that group (it knows the "
-           "ladders, paths and walls). The climb points below are for climb orders of your own; a unit that has "
-           "climbed stays on its wall until you send it on."]
+           "  Simplest: task assault (each infantry unit climbs its own spread-out section, ring by ring) or "
+           "ai_assault (the game's own battle AI storms with the group). The climb points below are for climb "
+           "orders of your own; a unit that has climbed stays on its wall until you send it on."]
     shooters = [e for e in (theirs or []) if e.fighting_fit and e.missile and e.range]
     if shooters:
         far = max(e.range for e in shooters)
@@ -576,9 +576,9 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
         out.append("")
         if attacking:
             out.append(f"TEMPO: no assault for {idle_s:.0f}s - marching to staging points does not count. Put most "
-                       "of your infantry in a group with task assault NOW (the game's battle AI storms the walls "
-                       "with it), with missile units shooting the defenders above them. Every minute outside the "
-                       "walls is a minute under their fire.")
+                       "of your infantry in a group with task assault or ai_assault NOW, with missile units "
+                       "shooting the defenders above them. Every minute outside the walls is a minute under their "
+                       "fire.")
         else:
             out.append(f"TEMPO: your plans have not sent the army forward for {idle_s:.0f}s. Unless the enemy is "
                        "closing in on you right now, take the initiative: advance, flank, threaten their guns or "

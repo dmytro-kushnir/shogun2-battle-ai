@@ -119,12 +119,13 @@ How to answer:
   walls facing the attack, melee units (spears, swords) hold the sections and gates where ladders and the
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
-  trading fire and do not gather at staging points - assault, and keep assaulting. Use task assault for most of
-  the army as soon as it is near the walls (within ~250 m): the game's own battle AI then storms the castle with
-  that group - it knows the ladders, the paths and the rings of walls. You decide which units go and when; you can
-  run several assault groups from different sides (each with its own name) to split the defence. Keep some
-  missile units out of the assault, shooting the defenders above the attackers, and keep cavalry back. Hold
-  back only a small reserve. Any infantry can also climb one section with task climb (its building id; ninjas
+  trading fire and do not gather at staging points - assault, and keep assaulting. As soon as the army is near
+  the walls (within ~250 m) put most of it in an assault group, with one of two tasks: assault - every infantry
+  unit climbs its own spread-out wall section, over each ring in turn to the top, while a third of the missile
+  units stay below and shoot; or ai_assault - the game's own battle AI storms the castle with the group. Do not
+  mix your own climb / move orders into an assault group's units: let it run. You can run several assault groups
+  from different sides (each with its own name) to split the defence; keep cavalry back. Hold back only a small
+  reserve. Any infantry can also climb one section with task climb (its building id; ninjas
   climb fastest); once up it stays on that wall until you give it its next task.
   Damaged walls and gates (health 0) are NOT open: units sent through them stop outside, under fire. Climb.
   Units on the ladders cannot fight back, so pin the defenders of that stretch with missile fire, and climb at

@@ -294,10 +294,34 @@ def test_assault():
     cav = unit(21, 2, 50, 280)
     foe = unit(30, 1, 0, 60, "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
     us = inf + [bow, cav, foe]
+    # assault (our own): each infantry unit climbs its own spread-out section, ring by ring, then takes the top
     ex = Executor(2, TIMINGS, STATS)
     ex.set_buildings(blds)
-    # assault: the group goes to the game's AI - not under our control, one ai_group order to capture the castle
-    raw = plan_of(group([10, 11, 12, 13], task="assault"), group([20], target=30), group([21], task="hold"))
+    ex.set_plan(plan_of(group([10, 11, 12, 13, 20, 21], task="assault")), us, 0)
+    o = {x["unit"]: x for x in ex.tick(us, 0)[1]}
+    climbs = [o[i]["building"] for i in (10, 11, 12, 13)]
+    assert all(o[i]["cmd"] == "climb" for i in (10, 11, 12, 13)), o
+    assert len(set(climbs)) == 4 and all(b <= 36 for b in climbs), climbs  # four different outer sections
+    pts = [(blds[b]["x"], blds[b]["y"]) for b in climbs]
+    assert all(m.dist(p, q) >= 40 for p in pts for q in pts if p != q), pts  # spread out
+    assert o[20]["cmd"] == "attack" and o[20]["target"] == 30, o            # bows shoot the defenders
+    assert 21 not in o, o                                                   # cavalry waits
+    saved = [(u.x, u.y, u.z) for u in inf[:2]]
+    inf[0].x, inf[0].y, inf[0].z = -40, 80, 2   # over the outer ring: climbs the inner one
+    inf[1].x, inf[1].y, inf[1].z = 10, 20, 9    # past both: takes the top
+    o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
+    assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
+    assert o[11]["cmd"] == "occupy", o
+    blds[3]["hp"] = 0                           # damaged pieces are no way in (siege 201310)
+    o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
+    assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
+    blds[3]["hp"] = 1
+    for u, (x, y, z) in zip(inf[:2], saved):
+        u.x, u.y, u.z = x, y, z
+    # ai_assault: the group goes to the game's AI - not under our control, one ai_group order to capture the castle
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    raw = plan_of(group([10, 11, 12, 13], task="ai_assault"), group([20], target=30), group([21], task="hold"))
     raw["groups"][0]["name"] = "stormers"
     ex.set_plan(raw, us, 0)
     take, orders = ex.tick(us, 0)

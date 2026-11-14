@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-TASKS = ["attack", "move", "hold", "withdraw", "garrison", "climb", "attack_building", "occupy", "assault"]
+TASKS = ["attack", "move", "hold", "withdraw", "garrison", "climb", "attack_building", "occupy", "assault",
+         "ai_assault"]
 BUILDING_TASKS = {"garrison", "climb", "attack_building"}
 
 PLAN_SCHEMA = {
@@ -31,10 +32,12 @@ PLAN_SCHEMA = {
                                             "(a wall section, tower or gate: missile units shoot from it); climb: "
                                             "scale the wall section `building` (attackers); attack_building: "
                                             "attack `building` (e.g. a gate); occupy: take and hold the point "
-                                            "`position` (e.g. the keep's courtyard); assault: hand the group to "
-                                            "the game's own battle AI to storm the enemy castle (it climbs, paths "
-                                            "and fights by itself; in a field battle it attacks the nearest "
-                                            "enemies) - no target/building/position needed"},
+                                            "`position` (e.g. the keep's courtyard); assault: storm the castle - "
+                                            "each infantry unit climbs its own spread-out wall section, ring after "
+                                            "ring up to the top, a third of the missile units shoot the defenders, "
+                                            "cavalry waits; ai_assault: hand the group to the game's own battle AI "
+                                            "to storm the castle (in a field battle it attacks the nearest "
+                                            "enemies) - neither needs target/building/position"},
                     "target": {"type": ["integer", "null"], "description": "attack: id of an ENEMY unit"},
                     "building": {"type": ["integer", "null"],
                                  "description": "garrison/climb/attack_building: id of a building from "
