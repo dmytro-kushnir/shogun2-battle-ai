@@ -76,7 +76,9 @@ def merge(static: dict[int, dict], state: dict) -> list[U]:
         if st is None or s.get("x") is None:
             continue
         t = st.get("type") or "?"
-        kind = "ship" if st.get("ship") else "art" if st.get("art") else "cav" if st.get("cav") else "inf"
+        # the live flag wins: dismounted cavalry fights (and climbs) as infantry
+        cav = s["cav"] if s.get("cav") is not None else st.get("cav")
+        kind = "ship" if st.get("ship") else "art" if st.get("art") else "cav" if cav else "inf"
         units.append(U(
             id=s["id"], alliance=st["alliance"], type=t, kind=kind,
             missile=(st.get("range") or 0) > 0 and (st.get("ammo0") or 0) > 0,

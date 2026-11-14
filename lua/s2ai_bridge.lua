@@ -259,6 +259,8 @@ local function state_record(id, e)
 		gar = call(u, "is_currently_garrisoned"),
 		ab = call(u, "current_special_ability"), ab_ok = call(u, "can_perform_special_ability"),
 		ctl = B.controlled[id] ~= nil,
+		-- live: cavalry that dismounts (perform_special_ability("dismount"), siege 20261114-104622) is infantry
+		cav = call(u, "is_cavalry"),
 	}
 end
 

@@ -393,6 +393,27 @@ def test_assault():
     assert goes_forward({"groups": [{"units": [10, 11, 12, 13], "task": "assault"}]}, out, 2, siege_attack=True)
 
 
+def test_dismounted_cavalry_climbs():
+    from s2ai import report
+    # siege 20261114-104622: perform_special_ability("dismount") worked, but the units stayed "cavalry" for us
+    static = {21: {"id": 21, "alliance": 2, "type": "Cav_Sword_Katana_Cavalry_Takeda", "men0": 80, "cav": True}}
+    mounted = {"t": 0, "units": [{"id": 21, "x": 0, "y": 300, "men": 80, "cav": True}]}
+    on_foot = {"t": 1, "units": [{"id": 21, "x": 0, "y": 300, "men": 80, "cav": False}]}
+    old = {"t": 1, "units": [{"id": 21, "x": 0, "y": 300, "men": 80}]}     # recordings without the live flag
+    assert report.merge(static, mounted)[0].kind == "cav"
+    assert report.merge(static, on_foot)[0].kind == "inf"
+    assert report.merge(static, old)[0].kind == "cav"
+    blds = {i + 1: {"id": i + 1, "name": f"castle_wall_{i}", "owner": 1, "x": -100 + 20 * i, "y": 100, "z": 0,
+                    "hp": 1} for i in range(11)}
+    foe = unit(30, 1, 0, 60, "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    us = report.merge(static, on_foot) + [foe]
+    ex.set_plan(plan_of(group([21], task="assault")), us, 1)
+    o = ex.tick(us, 1)[1]
+    assert o and o[0]["cmd"] == "climb", o
+
+
 def test_missile_line_width():
     from s2ai.executor import line_width
     gun = unit(1, 2, 0, 0, "inf", 120, "Inf_Missile_Matchlock_Samurai", True)
