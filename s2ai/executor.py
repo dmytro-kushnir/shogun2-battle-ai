@@ -10,6 +10,7 @@ import math
 from .report import U, bearing, building_kind, castle_levels, dist, spread
 
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
+CLIMB_RETRY_S = 20.0    # ... a climb, when the unit stands still and is not up on its wall piece
 SPACING_EXTRA_M = 6.0   # gap between units in a line
 DEFAULT_WIDTH_M = 30.0
 VIA_REACHED_M = 30.0     # a unit counts as through a waypoint this close to it
@@ -361,9 +362,14 @@ class Executor:
                 continue
             sig = want.pop("_sig")
             last = self.issued.get(u.id)
-            # a climb is never repeated: a unit that stands still on the wall it climbed is not stuck, and a repeat
-            # sent it down and up again (siege 20261113-201310: altitude 12 -> 5 -> 12 for 250 s under fire)
-            stale = last is not None and t - last[1] > REISSUE_S and not u.moving and want["cmd"] != "climb"
+            stale = last is not None and t - last[1] > REISSUE_S and not u.moving
+            if want["cmd"] == "climb":
+                # A unit standing on the wall it was sent to is not stuck: a repeat sent it down and up again
+                # (siege 20261113-201310: altitude 12 -> 5 -> 12 for 250 s). But a unit fighting on the wall it
+                # climbed drops the order for the next ring, and with no repeat it stood there 200-450 s (siege
+                # 20261114-102539, every climber). So: repeat after CLIMB_RETRY_S still, unless up on its piece.
+                stale = last is not None and t - last[1] > CLIMB_RETRY_S and not u.moving and \
+                    not self._on_piece(u, self.buildings.get(want["building"]))
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)

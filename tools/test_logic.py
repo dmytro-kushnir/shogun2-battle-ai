@@ -349,9 +349,12 @@ def test_assault():
     raw["groups"][0]["building"] = 1
     ex.set_plan(raw, [climber, foe], 0)
     assert ex.tick([climber, foe], 0)[1][0]["cmd"] == "climb"
-    assert ex.tick([climber, foe], 30)[1] == []          # standing at the ladder: no repeat
-    climber.y, climber.z = w["y"] + 2, 7                  # up on the wall
-    assert ex.tick([climber, foe], 60)[1] == []
+    assert ex.tick([climber, foe], 10)[1] == []          # not yet
+    # standing still below its wall for 20 s+: the game dropped the order (siege 102539) -> sent again
+    o = ex.tick([climber, foe], 30)[1]
+    assert o and o[0]["cmd"] == "climb", o
+    climber.y, climber.z = w["y"] + 2, 7                  # up on the wall it was sent to: never again
+    assert ex.tick([climber, foe], 60)[1] == [] and ex.tick([climber, foe], 120)[1] == []
     # TEMPO: attacking a castle, marching does not count, assault does
     out = [unit(10 + i, 2, -60 + 30 * i, 220, "inf", 160, "Inf_Spear_Yari_Ashigaru") for i in range(4)] + [foe]
     march = {"groups": [{"units": [10, 11, 12, 13], "task": "move", "position": [0, 130]}]}
