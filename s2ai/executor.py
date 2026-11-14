@@ -33,6 +33,7 @@ ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a r
 ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
 ASSAULT_SHARE_PENALTY_M = 25.0  # inner rings: a piece another unit climbs counts as this much farther
 CLIMB_MAX_SENDS = 4      # climb orders to one piece before the unit gives it up and tries another
+TOP_FIGHT_M = 150.0      # a unit over every ring attacks defenders this close before it occupies the top
 
 # Tasks the game's own tactical AI carries out for a group (one planner per group in the bridge): the general
 # chooses units and objective, the game does the pathing, climbing and fighting. Siege 20261114-101605: four
@@ -284,7 +285,13 @@ class Executor:
                 done.add(i)
         todo = [i for i in range(len(levels)) if i not in done]
         if not todo:
+            # over every ring: fight the defenders up here (siege 20261114-105902: a unit told to occupy stood
+            # 140 s at the top with an enemy 52 m away); occupy once none is near
             self.assault_slot.pop(u.id, None)
+            near = [e for e in enemies if dist(u, e) < TOP_FIGHT_M]
+            if near:
+                foe = self._best_target(u, near)
+                return {"cmd": "attack", "unit": u.id, "target": foe.id, "run": True, "_sig": f"attack:{foe.id}"}
             return occupy
         lv = levels[todo[0]]
         failed = self.climb_failed.setdefault(u.id, set())
@@ -317,6 +324,7 @@ class Executor:
         logs which the game takes (probe). Once per unit; None when already sent or the unit cannot dismount."""
         if "can dismount" in (self.stats.get(u.type) or {}).get("traits", []) and u.id not in self.dismount_sent:
             self.dismount_sent.add(u.id)
+            self.ability_used.setdefault((u.id, "dismount"), []).append(self.plan_t)  # shows as used up
             return {"cmd": "dismount", "unit": u.id, "_sig": "dismount"}
         return None
 
@@ -425,6 +433,8 @@ class Executor:
                 self.ability_used.setdefault((a["unit"], a["ability"]), []).append(t)
                 self.ability_log.append({"t": t, "unit": a["unit"], "ability": a["ability"]})
                 orders.append({"cmd": "ability", "unit": a["unit"], "ability": a["ability"]})
+                if a["ability"] == "dismount":
+                    self.dismount_sent.add(a["unit"])  # the general did it: no second (toggling) order
         self.pending_abilities = []
         self.last_orders = orders
         return take, orders

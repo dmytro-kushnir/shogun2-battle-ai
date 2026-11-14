@@ -28,7 +28,9 @@ ICONS = REPO / "runtime" / "icons"
 # no target. (Inspire Unit and Regroup Position need a clicked target; Stand and Fight pins the general down;
 # formations and deployables are other commands.) Text: the game's own descriptions, shortened.
 ABILITIES = {
-    "rally": "general: boosts the morale of units around him and rallies ROUTING units nearby; long cooldown",
+    "dismount": "cavalry: get off the horses and fight on foot, for the rest of the battle - attacking a castle, "
+                "dismounted cavalry can climb the walls like infantry",
+    "rally":"general: boosts the morale of units around him and rallies ROUTING units nearby; long cooldown",
     "warcry": "demoralises up to 4 nearby enemy units, lowering their melee defence and speed for a while",
     "stand_firm": "Hold Firm: this unit and up to 3 nearby become unbreakable with more defence for a while, but slower",
     "banzai": "unbreakable, faster, stronger charge and melee for a short time; weaker for a while afterwards",
@@ -414,7 +416,7 @@ def battery_stats(stats: dict, gun_shots: dict, projectiles: dict) -> dict[str, 
     return out
 
 
-CACHE_VERSION = 7
+CACHE_VERSION = 8
 SHIPS = "db\\unit_stats_naval_tables\\unit_stats_naval"
 GUN_SHOTS = "db\\gun_type_to_projectiles_tables\\gun_type_to_projectiles"
 PROJECTILES = "db\\projectiles_tables\\projectiles"
@@ -497,6 +499,12 @@ def _read_game_data(packs: list[Path], stamp: list) -> dict:
     stats.update(battery_stats(stats, gun_shots, projectiles))  # keyed by building, read before ships join
     stats.update(ship_stats(ships, gun_shots, projectiles))  # ships live with the land units' stats
     units = {u: [a for a in ab if a in ABILITIES] for u, ab in units.items()}
+    # dismount is not a db ability but the unit flag can_dismount; the script triggers it with
+    # perform_special_ability("dismount") (siege 20261114-104622). Once per battle (a second call may remount).
+    for key, st in stats.items():
+        if "can dismount" in st.get("traits", []):
+            units.setdefault(key, []).append("dismount")
+    timings["dismount"] = {"active": 0.0, "recharge": 0.0, "uses": 1}
     units = {u: ab for u, ab in units.items() if ab}
     data = {"v": CACHE_VERSION, "packs": stamp, "units": units, "timings": timings, "stats": stats,
             "names": names, "pictures": pictures}

@@ -311,7 +311,7 @@ def test_assault():
     inf[1].x, inf[1].y, inf[1].z = 10, 20, 9    # past both: takes the top
     o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
     assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
-    assert o[11]["cmd"] == "occupy", o
+    assert o[11]["cmd"] == "attack" and o[11]["target"] == 30, o   # at the top: fights the defender there
     blds[3]["hp"] = 0                           # damaged pieces are no way in (siege 201310)
     o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
     assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
@@ -412,6 +412,29 @@ def test_dismounted_cavalry_climbs():
     ex.set_plan(plan_of(group([21], task="assault")), us, 1)
     o = ex.tick(us, 1)[1]
     assert o and o[0]["cmd"] == "climb", o
+
+
+def test_assault_top_and_dismount_ability():
+    import math as m
+    from s2ai.gamedata import game_data
+    # over every ring: fight the defenders nearby instead of standing to occupy (siege 105902: 140 s idle)
+    blds = {i + 1: {"id": i + 1, "name": f"castle_wall_{i}", "owner": 1, "x": 120 * m.sin(m.radians(i * 10)),
+                    "y": 120 * m.cos(m.radians(i * 10)), "z": 0, "hp": 1} for i in range(36)}
+    top = unit(10, 2, 0, 20, "inf", 160, "Inf_Spear_Yari_Ashigaru")
+    foe = unit(30, 1, 40, 0, "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    ex.set_plan(plan_of(group([10], task="assault")), [top, foe], 0)
+    o = ex.tick([top, foe], 0)[1]
+    assert o and o[0]["cmd"] == "attack" and o[0]["target"] == 30, o
+    foe.x = 400                                   # nobody near: occupy the top
+    ex.set_plan(plan_of(group([10], task="assault")), [top, foe], 1)
+    assert ex.tick([top, foe], 1)[1][0]["cmd"] == "occupy"
+    # dismount is an ability the general can order, once (game data: can_dismount units)
+    gd = game_data()
+    assert "dismount" in gd["units"].get("Cav_Sword_Katana_Cavalry_Takeda", []), gd["units"].get(
+        "Cav_Sword_Katana_Cavalry_Takeda")
+    assert gd["timings"]["dismount"]["uses"] == 1
 
 
 def test_missile_line_width():

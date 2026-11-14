@@ -134,10 +134,11 @@ How to answer:
   usually faster. Hill castles have several levels: once over the outer wall, climb the next ring at once (the
   report lists climb points per level) - do not stop between rings where the upper walls shoot down at you. Keep
   going to the top level and occupy it.
-  Cavalry cannot climb, break gates or reach units ON THE CASTLE (the report marks them): mounted it waits beyond
-  the defenders' missile range (the report gives it) and rides down defenders who come out or run. Cavalry that
-  "can dismount" (UNIT TYPES) dismounts when you give it climb or assault, and then climbs like infantry (it
-  shows as kind inf from then on).
+  Cavalry cannot climb, break gates or reach units ON THE CASTLE (the report marks them). Mounted cavalry has
+  nothing to do against walls, so in your FIRST plan of a castle attack use the ability dismount on every
+  cavalry unit that has it (keep at most one mounted unit to ride down defenders who come out or run) and put
+  the dismounted units in the assault: they climb like infantry (kind inf from then on). Cavalry left mounted
+  waits beyond the defenders' missile range (the report gives it).
 - Routes: `via` = up to 3 waypoints the group goes through before its task. Use it to go AROUND an enemy line
   instead of through its fire: the ENEMY FORMATION section gives flank routes that stay out of its small-arms
   range. A unit that is "in range of enemy ..." is being shot at, or can be.
