@@ -366,6 +366,13 @@ def test_assault():
     inf[3].men = 0                                                              # the group changes: sent at once
     g2 = [o for o in ex.tick(us, 41)[1] if o["cmd"] == "ai_group"]
     assert g2 and g2[0]["units"] == [10, 11, 12], g2
+    # abilities for units the game's AI runs are not sent (no controller: siege 110635 had 5 refused)
+    ex6 = Executor(2, TIMINGS, STATS)
+    ex6.set_buildings(blds)
+    probs = ex6.set_plan(plan_of(group([10], task="ai_assault"), abilities=[{"unit": 10, "ability": "rally"}]),
+                         us, 0)
+    assert probs and "ai_assault" in probs[0], probs
+    assert not [o for o in ex6.tick(us, 0)[1] if o["cmd"] == "ability"]
     # a field battle (no castle): the game's AI attacks the nearest enemy with the group
     ex2 = Executor(2, TIMINGS, STATS)
     ex2.set_plan(raw, us, 0)

@@ -172,9 +172,14 @@ class Executor:
         self.retarget = {}  # a new plan: its targets first, replacements chosen afresh
         problems = []
         self.pending_abilities = []
+        game_ai = {i for g in plan["groups"] if g["task"] in GAME_AI_TASKS for i in g["units"]}
         for a in plan.get("abilities") or []:
             st, left = self.ability_status(a["unit"], a["ability"], t)
-            if st == "ready":
+            if a["unit"] in game_ai:
+                # the game's AI runs that unit: we hold no controller for it (siege 20261114-110635: 5 refused)
+                problems.append(f"ability {a['ability']} on {a['unit']}: the unit is in an ai_assault group (the "
+                                f"game's AI decides its abilities); not sent")
+            elif st == "ready":
                 self.pending_abilities.append(a)
             else:
                 problems.append(f"ability {a['ability']} on {a['unit']}: {st}"
