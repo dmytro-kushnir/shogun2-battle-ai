@@ -119,10 +119,10 @@ How to answer:
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
   trading fire and do not gather at staging points - assault, and keep assaulting. Use task assault for most of
-  the army as soon as it is near the walls (within ~250 m): the executor sends every infantry unit to its own
-  climb point, spread along the wall, over each ring in turn and on to the top; a third of the missile units in
-  the group stay below and shoot the defenders, which keeps their heads down while the others climb; cavalry
-  waits. Climb with as many units as you can at once - the more places at once, the thinner the defence. Hold
+  the army as soon as it is near the walls (within ~250 m): the game's own battle AI then storms the castle with
+  that group - it knows the ladders, the paths and the rings of walls. You decide which units go and when; you can
+  run several assault groups from different sides (each with its own name) to split the defence. Keep some
+  missile units out of the assault, shooting the defenders above the attackers, and keep cavalry back. Hold
   back only a small reserve. Any infantry can also climb one section with task climb (its building id; ninjas
   climb fastest); once up it stays on that wall until you give it its next task.
   Damaged walls and gates (health 0) are NOT open: units sent through them stop outside, under fire. Climb.

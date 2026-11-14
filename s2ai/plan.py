@@ -31,10 +31,10 @@ PLAN_SCHEMA = {
                                             "(a wall section, tower or gate: missile units shoot from it); climb: "
                                             "scale the wall section `building` (attackers); attack_building: "
                                             "attack `building` (e.g. a gate); occupy: take and hold the point "
-                                            "`position` (e.g. the keep's courtyard); assault: storm the castle - "
-                                            "each infantry unit climbs its own spread-out wall section, ring after "
-                                            "ring up to the top, missile units shoot the nearest defenders, cavalry "
-                                            "rides in through open breaches (no target/building/position needed)"},
+                                            "`position` (e.g. the keep's courtyard); assault: hand the group to "
+                                            "the game's own battle AI to storm the enemy castle (it climbs, paths "
+                                            "and fights by itself; in a field battle it attacks the nearest "
+                                            "enemies) - no target/building/position needed"},
                     "target": {"type": ["integer", "null"], "description": "attack: id of an ENEMY unit"},
                     "building": {"type": ["integer", "null"],
                                  "description": "garrison/climb/attack_building: id of a building from "

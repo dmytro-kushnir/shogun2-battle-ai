@@ -98,6 +98,10 @@ local function make_planner(name)
     local mine = {}
     return obj({
         add_units = function(_, u) mine[#mine + 1] = u end,
+        remove_units = function(_, u)
+            for i, x in ipairs(mine) do if x == u then table.remove(mine, i); break end end
+            MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " remove"
+        end,
         attack_unit = function(_, t)
             MOCK_CALLS[#MOCK_CALLS + 1] = "planner " .. name .. " (" .. #mine .. " units)->" .. t.name_
             for _, u in ipairs(mine) do u.target = t end
@@ -441,6 +445,23 @@ def main() -> bool:
                 link.poll()
                 if "planner a1 capture" not in g.MOCK_CALLS.values():
                     problems.append(f"ai capture order did not reach the engine: {link.battle.applied[-1:]}")
+                # a group of our own army handed to the game's AI (task assault): not under our controllers
+                ours2 = [u["id"] for u in link.battle.state["units"] if static[u["id"]]["alliance"] == 2]
+                n_calls = len(g.MOCK_CALLS)
+                link.send(ours2[1:], [{"cmd": "ai_group", "group": "stormers", "units": ours2[:2],
+                                       "objective": "capture", "x": 80, "y": 30, "target": ai_id}])
+                tick()
+                link.poll()
+                new = list(g.MOCK_CALLS.values())[n_calls:]
+                errs = link.battle.applied[-1]["errors"] if link.battle.applied else []
+                if "planner a2 capture" not in new or errs:
+                    problems.append(f"group planner order did not reach the engine: {new} {errs}")
+                # moving the group's units back under our control takes them out of the planner
+                link.send(ours2, [])
+                tick()
+                link.poll()
+                if not any(c == "planner a2 remove" for c in list(g.MOCK_CALLS.values())[n_calls:]):
+                    problems.append("a unit taken back from a group planner was not removed from it")
 
             g.MOCK_OVER = True
             g.MOCK_FIRE("BattleCompleted")

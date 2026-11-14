@@ -275,10 +275,13 @@ local function bury(uc)
 	if uc then GRAVEYARD[#GRAVEYARD + 1] = uc end
 end
 
+local leave_group_planners -- defined with the game's AI planners below
+
 local function take(id)
 	if B.controlled[id] then return B.controlled[id] end
 	local e = B.units[id]
 	if not e then return nil, "no unit " .. tostring(id) end
+	leave_group_planners(id) -- a unit the game's AI was running for a group comes back to us
 	local ok, uc = pcall(function()
 		local c = e.ship and e.army:create_ship_controller() or e.army:create_unit_controller()
 		bury(c) -- alive for the whole session, whatever happens next (see GRAVEYARD)
@@ -500,6 +503,93 @@ local AI_HANDLERS = {
 	end,
 }
 
+-- Groups of the general's own army run by the game's tactical AI: the general picks the units and the objective,
+-- the game does the pathing, climbing and fighting it already knows (our own climbing logic kept finding engine
+-- quirks: siege 20261113-201310). One planner per group name, created on first use and kept alive (GRAVEYARD);
+-- units that join or leave the group are added to or removed from it. Orders: { cmd = "ai_group", group = name,
+-- units = {ids}, objective = "capture" | "defend" | "attack", x, y, radius, target }. Whether one alliance can
+-- have several planners at once is what the first game test shows: each group's first call is logged.
+local function remove_from_planner(gp, id)
+	local e = B.units and B.units[id]
+	if e and on_field(id) then
+		local ok, err = pcall(function() gp.p:remove_units(e.unit) end)
+		if not ok then ai_log_once("remove", "remove_units refused: " .. tostring(err)) end
+	end
+	gp.members[id] = nil
+end
+
+leave_group_planners = function(id)
+	for _, gp in pairs(B.group_planners or {}) do
+		if gp.members[id] then remove_from_planner(gp, id) end
+	end
+end
+
+local function group_planner(o)
+	B.group_planners = B.group_planners or {}
+	local gp = B.group_planners[o.group]
+	if not gp then
+		local first = B.units[(o.units or {})[1]]
+		if not first then error("group " .. tostring(o.group) .. ": no unit " .. tostring((o.units or {})[1])) end
+		local p = B.battle:alliances():item(first.alliance):create_ai_unit_planner()
+		bury(p)
+		gp = { p = p, members = {} }
+		B.group_planners[o.group] = gp
+	end
+	local want = {}
+	for _, id in ipairs(o.units or {}) do want[id] = true end
+	for id in pairs(gp.members) do
+		if not want[id] then remove_from_planner(gp, id) end
+	end
+	local n = 0
+	for id in pairs(want) do
+		local e = B.units[id]
+		if e and not B.controlled[id] and not gp.members[id] then
+			for name, other in pairs(B.group_planners) do
+				if name ~= o.group and other.members[id] then remove_from_planner(other, id) end
+			end
+			gp.p:add_units(e.unit)
+			gp.members[id] = true
+		end
+		if gp.members[id] then n = n + 1 end
+	end
+	return gp, n
+end
+
+AI_HANDLERS.ai_group = function(o)
+	local gp, n = group_planner(o)
+	local how
+	if o.objective == "defend" then
+		gp.p:defend_position(vec(o.x, o.y), o.radius or 100)
+		how = "defend_position"
+	elseif o.objective == "capture" then
+		local ok, err = pcall(function() gp.p:capture_settlement() end)
+		how = "capture_settlement()"
+		if not ok then
+			local ok2, err2 = pcall(function() gp.p:capture_settlement(vec(o.x, o.y)) end)
+			how = "capture_settlement(v) (no arguments: " .. tostring(err) .. ")"
+			if not ok2 then
+				local target = B.units[o.target]
+				if not target then error("capture refused (" .. tostring(err2) .. ") and no target") end
+				gp.p:attack_unit(target.unit)
+				how = "attack_unit (capture_settlement refused: " .. tostring(err) .. " / " .. tostring(err2) .. ")"
+			end
+		end
+	else
+		local target = B.units[o.target]
+		if not target then error("no target unit " .. tostring(o.target)) end
+		gp.p:attack_unit(target.unit)
+		how = "attack_unit"
+	end
+	gp.logged = gp.logged or {}
+	if not gp.logged[how] then
+		gp.logged[how] = true
+		local count = 0
+		for _ in pairs(B.group_planners) do count = count + 1 end
+		log("group planner '" .. tostring(o.group) .. "': " .. n .. " units, " .. how .. " ok (" .. count
+			.. " group planner(s) this battle)")
+	end
+end
+
 -- The orders file is a Lua table literal written by the server. It runs in an empty environment, as source
 -- text only (precompiled bytecode can escape a setfenv sandbox, so it is refused) and with an instruction budget
 -- (so a broken file cannot hang the battle).
@@ -572,8 +662,8 @@ local function apply_orders()
 		local handler = B.naval and SHIP_HANDLERS[o.cmd] or (not B.naval and HANDLERS[o.cmd]) or nil
 		local uc = B.controlled[o.unit]
 		local err
-		if o.alliance ~= nil then
-			-- an order for a whole alliance's game AI (no unit controller involved)
+		if o.alliance ~= nil or o.group ~= nil then
+			-- an order for the game's AI: a whole alliance, or a group of ours (no unit controller involved)
 			if not AI_HANDLERS[o.cmd] then err = "unknown cmd"
 			else
 				local ok, e = pcall(AI_HANDLERS[o.cmd], o)

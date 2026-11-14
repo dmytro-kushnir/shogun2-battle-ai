@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from .report import U, bearing, building_kind, castle_levels, dist, spread
+from .report import U, bearing, building_kind, castle_levels, dist
 
 REISSUE_S = 12.0        # repeat an unchanged command this often if the unit seems to have dropped it
 SPACING_EXTRA_M = 6.0   # gap between units in a line
@@ -21,13 +21,15 @@ MAN_FRONTAGE_M = 1.0
 MISSILE_LINE_MAX_M = 80.0
 
 
-# Assault (siege 20261113-195645: 40 units, 1113 s, not one climb - the general kept marching columns to staging
-# points): each infantry unit of an assault group gets its own climb point, spread out, and climbs ring after ring.
-ASSAULT_SPREAD_M = 45.0  # climb points at least this far apart
-ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a ring's piece is past that ring
-ASSAULT_ON_WALL_M = 20.0 # ... or this close to its piece and ASSAULT_UP_M higher: up on the wall
-ASSAULT_UP_M = 3.0
-ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
+ON_WALL_M = 20.0  # a climbing unit this close to its wall piece and ON_WALL_UP_M higher is up on the wall
+ON_WALL_UP_M = 3.0
+
+# Tasks the game's own tactical AI carries out for a group (one planner per group in the bridge): the general
+# chooses units and objective, the game does the pathing, climbing and fighting. Our own assault logic (spread
+# climb points, ring by ring) kept running into engine quirks - siege 20261113-201310: walls at health 0 that no
+# unit could pass, climbs that sent units down and up again - all things the game's AI already handles.
+GAME_AI_TASKS = {"assault": "capture"}
+GAME_AI_REISSUE_S = 30.0  # repeat a group's objective this often (the planner may settle on a target and stop)
 
 
 def line_width(u: U) -> float | None:
@@ -35,6 +37,8 @@ def line_width(u: U) -> float | None:
     if u.kind == "inf" and u.missile and u.men > 0:
         return max(u.w or 0.0, min(MISSILE_LINE_MAX_M, u.men / MISSILE_RANKS * MAN_FRONTAGE_M))
     return u.w or None
+
+
 DEFAULT_TIMING = {"active": 30.0, "recharge": 180.0, "uses": -1}
 
 # Cavalry hit-and-run: a charge does its damage on impact; cavalry that stays in a melee bleeds (battle 091516:
@@ -111,8 +115,7 @@ class Executor:
         self.pullback: dict[int, tuple[float, float, float, int]] = {}  # cavalry unit -> (x, y, until, target)
         self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
         self.shot: dict[int, str] = {}                          # ship -> shot type we last told it to load
-        self.assault_slot: dict[int, int] = {}                  # assaulting unit -> wall piece it climbs
-        self.assault_done: dict[int, set[int]] = {}             # assaulting unit -> castle levels it is past
+        self.group_issued: dict[str, tuple[str, float]] = {}    # game-AI group -> (signature, battle time sent)
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -227,69 +230,41 @@ class Executor:
     def _on_piece(u: U, b: dict | None) -> bool:
         """Up on that wall piece: next to it and higher than its base."""
         return b is not None and b.get("x") is not None and \
-            math.hypot(u.x - b["x"], u.y - b["y"]) < ASSAULT_ON_WALL_M and u.z >= (b.get("z") or 0) + ASSAULT_UP_M
+            math.hypot(u.x - b["x"], u.y - b["y"]) < ON_WALL_M and u.z >= (b.get("z") or 0) + ON_WALL_UP_M
 
-    def _assault(self, u: U, g: dict, by_id: dict[int, U], enemies: list[U]) -> dict | None:
-        """Storm the castle: missile units shoot the best defender in reach, cavalry waits (it cannot climb),
-        infantry climbs the next ring at its own spread-out wall piece, then the next ring, then occupies the top.
-        Damaged pieces are not used as ways in: in siege 20261113-201310 units sent through pieces at health 0
-        stopped 40-70 m short of them for over 100 s - the game found no path."""
-        forts = [b for b in self.buildings.values()
+    def _game_ai_orders(self, ours: list[U], enemies: list[U], t: float) -> list[dict]:
+        """One order per group the game's AI runs: its units and objective. Sent when the group changes, and again
+        every GAME_AI_REISSUE_S. assault: capture the enemy's castle (its top level's centre); in a field battle,
+        where there is none, attack the enemy unit nearest to the group."""
+        if self.plan is None:
+            return []
+        fit = {u.id: u for u in ours}
+        forts = [{**b, "kind": building_kind(b.get("name"))} for b in self.buildings.values()
                  if b.get("x") is not None and b.get("owner") and b.get("owner") != self.ai
                  and building_kind(b.get("name")) in ("wall", "gate", "tower", "keep")]
-        target = self._best_target(u, enemies)
-        if not forts:  # no enemy castle (taken, or a field battle): just attack
-            return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id, "run": True,
-                                                "_sig": f"attack:{target.id}"}
-        forts = [{**b, "kind": building_kind(b.get("name"))} for b in forts]
-        levels = castle_levels(forts)
-        top = [f for f in forts if f["kind"] == "keep"] or levels[-1]
-        cx, cy = sum(f["x"] for f in top) / len(top), sum(f["y"] for f in top) / len(top)
-        occupy = {"cmd": "occupy", "unit": u.id, "x": cx, "y": cy, "run": True,
-                  "_sig": f"occupy:{round(cx / 5)}:{round(cy / 5)}"}
-        broken = lambda f: isinstance(f.get("hp"), (int, float)) and f["hp"] < 0.05
-        members = [by_id[i] for i in g["units"] if i in by_id and by_id[i].fighting_fit]
-        if u.missile and (u.kind == "cav" or u.id in self._assault_shooters(members)):
-            # shoot the defenders while the others climb
-            return None if target is None else {"cmd": "attack", "unit": u.id, "target": target.id,
-                                                "run": False, "_sig": f"attack:{target.id}"}
-        if u.kind == "cav":
-            return None  # cannot climb: it waits (and keeps its last order)
-        done = self.assault_done.setdefault(u.id, set())
-        ud = math.hypot(u.x - cx, u.y - cy)
-        # levels it is past: closer to the centre than that ring's piece next to it, or up on its own piece
-        cur = self.buildings.get(self.assault_slot.get(u.id, -1))
-        for i, lv in enumerate(levels):
-            p = min(lv, key=lambda f: math.hypot(u.x - f["x"], u.y - f["y"]))
-            if ud < math.hypot(p["x"] - cx, p["y"] - cy) - ASSAULT_INSIDE_M:
-                done.add(i)
-            if cur is not None and any(f["id"] == cur["id"] for f in lv) and self._on_piece(u, cur):
-                done.add(i)
-        todo = [i for i in range(len(levels)) if i not in done]
-        if not todo:
-            self.assault_slot.pop(u.id, None)
-            return occupy
-        lv = levels[todo[0]]
-        if cur is not None and any(f["id"] == cur["id"] for f in lv) and not broken(cur):
-            b = cur
-        else:
-            walls = [f for f in lv if f["kind"] == "wall" and not broken(f)]
-            if not walls:
-                return occupy  # nothing to climb on this ring: go for the top
-            gx, gy = sum(m.x for m in members) / len(members), sum(m.y for m in members) / len(members)
-            points = spread(walls, lambda f: math.hypot(f["x"] - gx, f["y"] - gy), max(3, len(members)),
-                            ASSAULT_SPREAD_M)
-            taken = [self.assault_slot.get(m.id) for m in members if m.id != u.id]
-            b = min(points, key=lambda f: (taken.count(f["id"]), math.hypot(u.x - f["x"], u.y - f["y"])))
-            self.assault_slot[u.id] = b["id"]
-        return {"cmd": "climb", "unit": u.id, "building": b["id"], "run": True, "_sig": f"climb:{b['id']}"}
-
-    def _assault_shooters(self, members: list[U]) -> set[int]:
-        """The missile infantry of an assault group that stays below and shoots: a third (at least one), the
-        longest-ranged first. The rest climb - in the gunpowder era nearly all infantry has rifles (siege
-        20261113-195645: 22 of 40 units), and riflemen climb and fight with the bayonet."""
-        missile = sorted((m for m in members if m.missile and m.kind == "inf"), key=lambda m: (-m.range, m.id))
-        return {m.id for m in missile[:max(1, round(len(missile) * ASSAULT_SHOOT_SHARE))]} if missile else set()
+        out = []
+        for g in self.plan["groups"]:
+            if g["task"] not in GAME_AI_TASKS:
+                continue
+            members = sorted(i for i in g["units"] if i in fit)
+            if not members or not enemies:
+                continue
+            gx = sum(fit[i].x for i in members) / len(members)
+            gy = sum(fit[i].y for i in members) / len(members)
+            if forts:
+                top = [f for f in forts if f["kind"] == "keep"] or castle_levels(forts)[-1]
+                x, y = sum(f["x"] for f in top) / len(top), sum(f["y"] for f in top) / len(top)
+                objective = GAME_AI_TASKS[g["task"]]
+            else:
+                x, y, objective = gx, gy, "attack"
+            target = min(enemies, key=lambda e: math.hypot(e.x - gx, e.y - gy))
+            sig = f"{objective}:{members}"
+            last = self.group_issued.get(g["name"])
+            if last is None or last[0] != sig or t - last[1] >= GAME_AI_REISSUE_S:
+                self.group_issued[g["name"]] = (sig, t)
+                out.append({"cmd": "ai_group", "group": g["name"], "units": members, "objective": objective,
+                            "x": round(x, 1), "y": round(y, 1), "radius": 100, "target": target.id})
+        return out
 
     def _group_of(self, uid: int) -> dict | None:
         if self.plan:
@@ -307,6 +282,9 @@ class Executor:
         by_id = {u.id: u for u in units}
         orders, take = [], []
         for u in ours:
+            g = self._group_of(u.id)
+            if g is not None and g["task"] in GAME_AI_TASKS:
+                continue  # the game's AI runs it (see _game_ai_orders)
             take.append(u.id)
             want = self._hit_and_run(u, self._want(u, by_id, enemies), by_id, enemies, t)
             if want is None:
@@ -319,6 +297,7 @@ class Executor:
             if last is None or last[0] != sig or stale:
                 self.issued[u.id] = (sig, t)
                 orders.append(want)
+        orders.extend(self._game_ai_orders(ours, enemies, t))
         # ships: load the group's shot type when it changes (the game does not report the loaded one)
         for u in ours:
             g = self._group_of(u.id)
@@ -474,8 +453,8 @@ class Executor:
         if task in ("climb", "attack_building"):
             return {"cmd": task, "unit": u.id, "building": g["building"], "run": True,
                     "_sig": f"{task}:{g['building']}"}
-        if task == "assault":
-            return self._assault(u, g, by_id, enemies)
+        if task in GAME_AI_TASKS:
+            return None  # the game's AI runs the group
         if task == "occupy":
             x, y = g["position"]
             return {"cmd": "occupy", "unit": u.id, "x": x, "y": y, "run": g["run"],

@@ -296,25 +296,26 @@ def test_assault():
     us = inf + [bow, cav, foe]
     ex = Executor(2, TIMINGS, STATS)
     ex.set_buildings(blds)
-    ex.set_plan(plan_of(group([10, 11, 12, 13, 20, 21], task="assault")), us, 0)
-    o = {x["unit"]: x for x in ex.tick(us, 0)[1]}
-    climbs = [o[i]["building"] for i in (10, 11, 12, 13)]
-    assert all(o[i]["cmd"] == "climb" for i in (10, 11, 12, 13)), o
-    assert len(set(climbs)) == 4 and all(b <= 36 for b in climbs), climbs  # four different outer sections
-    pts = [(blds[b]["x"], blds[b]["y"]) for b in climbs]
-    assert all(m.dist(p, q) >= 40 for p in pts for q in pts if p != q), pts  # spread out
-    assert o[20]["cmd"] == "attack" and o[20]["target"] == 30, o            # bows shoot the defenders
-    assert 21 not in o, o                                                   # cavalry: no breach, waits
-    # unit 10 is over the outer ring: it climbs the inner one; unit 11 is past both: it takes the top
-    inf[0].x, inf[0].y, inf[0].z = -40, 80, 2
-    inf[1].x, inf[1].y, inf[1].z = 10, 20, 9
-    o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
-    assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
-    assert o[11]["cmd"] == "occupy", o
-    # damaged pieces are no way in (siege 201310): cavalry still waits, nobody is sent "through"
-    blds[3]["hp"] = 0
-    o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
-    assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
+    # assault: the group goes to the game's AI - not under our control, one ai_group order to capture the castle
+    raw = plan_of(group([10, 11, 12, 13], task="assault"), group([20], target=30), group([21], task="hold"))
+    raw["groups"][0]["name"] = "stormers"
+    ex.set_plan(raw, us, 0)
+    take, orders = ex.tick(us, 0)
+    assert not {10, 11, 12, 13} & set(take) and {20, 21} <= set(take), take
+    grp = [o for o in orders if o["cmd"] == "ai_group"]
+    assert len(grp) == 1 and grp[0]["group"] == "stormers" and grp[0]["units"] == [10, 11, 12, 13], orders
+    assert grp[0]["objective"] == "capture" and abs(grp[0]["x"]) < 1 and abs(grp[0]["y"]) < 1, grp  # the top
+    assert not any(o.get("unit") in (10, 11, 12, 13) for o in orders), orders  # no unit orders for them
+    assert not [o for o in ex.tick(us, 5)[1] if o["cmd"] == "ai_group"]       # unchanged: not again yet...
+    assert [o for o in ex.tick(us, 40)[1] if o["cmd"] == "ai_group"]          # ...but repeated after a while
+    inf[3].men = 0                                                              # the group changes: sent at once
+    g2 = [o for o in ex.tick(us, 41)[1] if o["cmd"] == "ai_group"]
+    assert g2 and g2[0]["units"] == [10, 11, 12], g2
+    # a field battle (no castle): the game's AI attacks the nearest enemy with the group
+    ex2 = Executor(2, TIMINGS, STATS)
+    ex2.set_plan(raw, us, 0)
+    g3 = [o for o in ex2.tick(us, 0)[1] if o["cmd"] == "ai_group"]
+    assert g3[0]["objective"] == "attack" and g3[0]["target"] == 30, g3
     # a unit up on the wall it climbed is not sent up again (siege 201310: 12 -> 5 -> 12 m for 250 s)
     ex = Executor(2, TIMINGS, STATS)
     ex.set_buildings(blds)
