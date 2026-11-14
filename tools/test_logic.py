@@ -351,6 +351,31 @@ def test_missile_line_width():
     assert o and o[0]["cmd"] == "move" and o[0]["width"] == 80.0, o  # standing in place, but too deep: re-form
 
 
+def test_sieges_to_game_ai():
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    from s2ai.server import GeneralCommander
+    board = SimpleNamespace(note=lambda *_: None, update=lambda **_: None)
+    link = SimpleNamespace(runtime=Path(tempfile.mkdtemp()), say=None)
+    static = {1: {"id": 1, "alliance": 2, "type": "Inf_Spear_Yari_Ashigaru", "men0": 100},
+              9: {"id": 9, "alliance": 1, "type": "Inf_Spear_Yari_Ashigaru", "men0": 100}}
+    state = {"t": 200.0, "phase": "conflict", "units": [{"id": 1, "x": 0, "y": 300, "men": 100},
+                                                         {"id": 9, "x": 0, "y": 0, "men": 100}]}
+    castle = {1: {"id": 1, "name": "castle_02_wall_10_01", "mil": True, "x": 0, "y": 50, "owner": 1}}
+    siege = SimpleNamespace(static=static, state=state, phase="conflict", buildings=castle, events=[])
+    gc = GeneralCommander(2, None, "t", board, link)
+    assert gc.decide(siege) == ([], []) and gc.siege == "attack"          # the game's AI keeps every unit
+    assert gc.extra_summary()["siege_by"] == "game"
+    early = {**state, "t": 5.0, "phase": "deployment"}   # before planning starts
+    field = SimpleNamespace(static=static, state=early, phase="deployment", buildings={}, events=[])
+    gc = GeneralCommander(2, None, "t", board, link)
+    assert gc.decide(field) is None and gc.siege == ""                    # a field battle: business as usual
+    gc = GeneralCommander(2, None, "t", board, link, sieges="claude")
+    siege.phase, siege.state = "deployment", early
+    assert gc.decide(siege) is None and gc.siege == "attack"              # --sieges claude: the general plans
+
+
 def test_ai_alliance():
     from s2ai.server import guess_ai_alliance
     arm = lambda *a: {"armies": [{"alliance": al, "army": n, "handicap": h} for al, n, h in a]}

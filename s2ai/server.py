@@ -194,9 +194,11 @@ class GeneralCommander:
     """The LLM plans in a background thread; the executor carries the latest plan out every tick."""
 
     def __init__(self, ai: int, general, battle_id: str, board: Board, link: GameLink,
-                 min_plan_s: float = 0.0, far_plan_s: float = 0.0):
+                 min_plan_s: float = 0.0, far_plan_s: float = 0.0, sieges: str = "game"):
         self.ai, self.general, self.battle_id, self.board, self.link = ai, general, battle_id, board, link
         self.min_plan_s, self.far_plan_s = min_plan_s, far_plan_s
+        self.sieges = sieges              # "game": a siege is left to the game's own AI; "claude": the general
+        self.siege: str | None = None     # "attack" / "defend" once the castle is known to be a siege
         self.timings = ability_timings()  # {ability: {active, recharge, uses}}, from the game's database
         self.stats = unit_stats()         # {unit type: stats}, from the game's database
         self.executor = Executor(ai, self.timings, self.stats)
@@ -214,12 +216,23 @@ class GeneralCommander:
         self.abilities = unit_abilities()  # {unit type: special abilities}, from the game's database (cached)
 
     def extra_summary(self) -> dict:
-        return {"cavalry_pullbacks": len(self.executor.pullbacks)}
+        return {"cavalry_pullbacks": len(self.executor.pullbacks),
+                "siege": self.siege, "siege_by": ("game" if self.sieges == "game" else "general") if self.siege else None}
 
     def decide(self, battle) -> tuple[list[int], list[dict]] | None:
         state = battle.state
         if state is None:
             return None
+        # Sieges go to the game's own battle AI (--sieges game): six test sieges with our own assault logic and
+        # with the game's planner per group (20261113-193825 .. 20261114-101605) went badly; the game already
+        # knows its castles. The general commands field and naval battles.
+        if self.siege is None and battle.buildings is not None:
+            self.siege = report.siege_side(report.fortifications(battle.buildings), self.ai) or ""
+            if self.siege and self.sieges == "game":
+                log.info("siege (%s): the game's own AI commands this battle (--sieges claude to change)", self.siege)
+                self.board.note(f"siege ({self.siege}): the game's own AI commands")
+        if self.siege and self.sieges == "game":
+            return [], []  # control nothing: every unit stays with the game's AI
         t = state["t"]
         units = report.merge(battle.static, state)
         # a finished plan?
@@ -360,6 +373,8 @@ def main() -> None:
                     help="never plan more often than this (the general asks for 4-30 s)")
     ap.add_argument("--far-plan-s", type=float, default=15.0,
                     help=f"while the armies are over {FAR_M:.0f} m apart, plan at most this often (0 = off)")
+    ap.add_argument("--sieges", choices=["game", "claude"], default="game",
+                    help="who commands sieges: the game's own AI (default) or the general")
     ap.add_argument("--ai-alliance", type=int, help="alliance index (1-based) the server commands")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--lan", action="store_true",
@@ -433,7 +448,8 @@ def main() -> None:
                 battle_id, take, link.say = b.id, [], None
                 if general is not None:
                     general.close()  # a fresh conversation per battle
-                    commander = GeneralCommander(ai, general, b.id, board, link, args.min_plan_s, args.far_plan_s)
+                    commander = GeneralCommander(ai, general, b.id, board, link, args.min_plan_s, args.far_plan_s,
+                                                 args.sieges)
                 elif args.commander == "none":
                     commander = NoCommander(ai)
                 else:
@@ -450,7 +466,7 @@ def main() -> None:
                     "ai": ai, "general": desc, "commander": args.commander, "opponent": args.opponent,
                     "condition": args.condition, "commit": code_commit,
                     "settings": {k: getattr(args, k) for k in ("model", "effort", "conversation_plans",
-                                                                "min_plan_s", "far_plan_s")}}))
+                                                                "min_plan_s", "far_plan_s", "sieges")}}))
                 board.note(f"battle {b.id} started, commanding alliance {ai}")
             elif kind == "event" and msg.get("name") != "BattleUnitAttacksEnemyUnit":  # too chatty to log
                 log.info("event %s%s", msg.get("name"), f" -> phase {msg['phase']}" if "phase" in msg else "")
