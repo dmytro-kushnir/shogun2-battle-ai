@@ -34,6 +34,17 @@ ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and s
 ASSAULT_SHARE_PENALTY_M = 25.0  # inner rings: a piece another unit climbs counts as this much farther
 CLIMB_MAX_SENDS = 4      # climb orders to one piece before the unit gives it up and tries another
 TOP_FIGHT_M = 150.0      # a unit over every ring attacks defenders this close before it occupies the top
+# Waves (siege 20261119-184847: units reached the top one at a time from 221 s to 1077 s, at most 5 at once
+# against 6 defenders, and broke 10-50 s after arriving - 2026 of the attackers' 2796 losses were up there): a
+# climber below the last ring waits until WAVE_MIN of its group's climbers are there or above, at most
+# WAVE_WAIT_MAX_S, then they go up together.
+WAVE_MIN = 4
+WAVE_WAIT_MAX_S = 45.0
+WAVE_FIGHT_M = 40.0  # a waiting climber still fights an enemy this close
+
+# Guns do not walk into range on an attack order (siege 20261119-184847: targets 457-487 m off, range 400, 20 min
+# of attack orders, one shot): a gun out of range is moved to GUN_RANGE_MARGIN_M inside its range first.
+GUN_RANGE_MARGIN_M = 30.0
 
 # Tasks the game's own tactical AI carries out for a group (one planner per group in the bridge): the general
 # chooses units and objective, the game does the pathing, climbing and fighting. Siege 20261114-101605: four
@@ -131,6 +142,11 @@ class Executor:
         self.dismount_sent: set[int] = set()                     # cavalry told to dismount (once each)
         self.climb_sends: dict[tuple[int, int], int] = {}       # (unit, wall piece) -> climb orders sent
         self.climb_failed: dict[int, set[int]] = {}             # unit -> pieces it gave up on
+        self.wave_wait: dict[int, float] = {}                   # climber -> battle time it began waiting below the top
+        self.wave_go: set[int] = set()                          # climbers whose wave has gone up
+        self.wave_note: dict[int, str] = {}                     # climber -> what it waits for, for the report
+        self.gun_note: dict[int, str] = {}                      # gun -> why it is moving, for the report
+        self.now = 0.0
 
     def set_buildings(self, buildings: dict[int, dict] | None) -> None:
         self.buildings = buildings or {}
@@ -298,6 +314,25 @@ class Executor:
                 foe = self._best_target(u, near)
                 return {"cmd": "attack", "unit": u.id, "target": foe.id, "run": True, "_sig": f"attack:{foe.id}"}
             return occupy
+        last = len(levels) - 1
+        self.wave_note.pop(u.id, None)
+        if todo == [last] and last > 0 and u.id not in self.wave_go:
+            shooters = self._assault_shooters(members)
+            climbers = [m for m in members if m.kind != "cav" and m.id not in shooters]
+            up = [m for m in climbers
+                  if m.id == u.id or all(i in self.assault_done.get(m.id, ()) for i in range(last))]
+            need = min(WAVE_MIN, len(climbers))
+            since = self.wave_wait.setdefault(u.id, self.now)
+            if len(up) < need and self.now - since < WAVE_WAIT_MAX_S:
+                self.wave_note[u.id] = (f" | waiting below the top ring for the assault wave ({len(up)}/{need} "
+                                        f"ready, goes in {WAVE_WAIT_MAX_S - (self.now - since):.0f}s at the latest)")
+                close = [e for e in enemies if dist(u, e) < WAVE_FIGHT_M]
+                if close:  # waiting is no reason to stand still in a fight
+                    foe = self._best_target(u, close)
+                    return {"cmd": "attack", "unit": u.id, "target": foe.id, "run": True, "_sig": f"attack:{foe.id}"}
+                return {"cmd": "halt", "unit": u.id, "_sig": "wave"}
+            self.wave_go.add(u.id)
+            self.wave_wait.pop(u.id, None)
         lv = levels[todo[0]]
         failed = self.climb_failed.setdefault(u.id, set())
         if cur is not None and self.climb_sends.get((u.id, cur["id"]), 0) >= CLIMB_MAX_SENDS:
@@ -395,6 +430,7 @@ class Executor:
         """-> (units to control, new orders). Without a plan: control nothing."""
         if self.plan is None:
             return [], []
+        self.now = t
         ours = [u for u in units if u.alliance == self.ai and u.fighting_fit]
         enemies = [u for u in units if u.alliance != self.ai and u.fighting_fit]
         by_id = {u.id: u for u in units}
@@ -404,7 +440,7 @@ class Executor:
             if g is not None and g["task"] in GAME_AI_TASKS:
                 continue  # the game's AI runs it (see _game_ai_orders)
             take.append(u.id)
-            want = self._hit_and_run(u, self._want(u, by_id, enemies), by_id, enemies, t)
+            want = self._gun_reach(u, self._hit_and_run(u, self._want(u, by_id, enemies), by_id, enemies, t), by_id)
             if want is None:
                 continue
             sig = want.pop("_sig")
@@ -450,7 +486,31 @@ class Executor:
             return " | pulling back after its charge, will charge again"
         if uid in self.shot:
             return f" | loaded: {self.shot[uid]}"
+        if uid in self.wave_note:
+            return self.wave_note[uid]
+        if uid in self.gun_note:
+            return self.gun_note[uid]
         return ""
+
+    def _gun_reach(self, u: U, want: dict | None, by_id: dict[int, U]) -> dict | None:
+        """A gun told to attack a target out of its range moves to GUN_RANGE_MARGIN_M inside it first, on the line
+        to the target, facing it; in range, the attack goes out unchanged."""
+        self.gun_note.pop(u.id, None)
+        if u.kind != "art" or not u.range or want is None or want.get("cmd") != "attack":
+            return want
+        target = by_id.get(want["target"])
+        if target is None:
+            return want
+        d = dist(u, target)
+        if d <= u.range:
+            return want
+        step = d - (u.range - GUN_RANGE_MARGIN_M)
+        facing = bearing(u.x, u.y, target.x, target.y)
+        x = u.x + math.sin(math.radians(facing)) * step
+        y = u.y + math.cos(math.radians(facing)) * step
+        self.gun_note[u.id] = f" | {d:.0f} m from its target, range {u.range:.0f}: moving into range first"
+        return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": facing, "width": u.w or None, "run": True,
+                "_sig": f"gunreach:{target.id}:{round(x / 20)}:{round(y / 20)}"}
 
     def _hit_and_run(self, u: U, want: dict | None, by_id: dict[int, U], enemies: list[U], t: float) -> dict | None:
         pb = self.pullback.get(u.id)

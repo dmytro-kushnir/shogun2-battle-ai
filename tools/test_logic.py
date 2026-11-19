@@ -310,11 +310,13 @@ def test_assault():
     inf[0].x, inf[0].y, inf[0].z = -40, 80, 2   # over the outer ring: climbs the inner one
     inf[1].x, inf[1].y, inf[1].z = 10, 20, 9    # past both: takes the top
     o = {x["unit"]: x for x in ex.tick(us, 1)[1]}
-    assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o
+    assert o[10]["cmd"] == "halt" and "wave" in ex.unit_note(10), o   # below the last ring: waits for the wave
     assert o[11]["cmd"] == "attack" and o[11]["target"] == 30, o   # at the top: fights the defender there
     blds[3]["hp"] = 0                           # damaged pieces are no way in (siege 201310)
     o = {x["unit"]: x for x in ex.tick(us, 2)[1]}
     assert 21 not in o and o.get(12, {}).get("cmd") != "occupy", o
+    o = {x["unit"]: x for x in ex.tick(us, 48)[1]}
+    assert o[10]["cmd"] == "climb" and o[10]["building"] >= 50, o   # waited WAVE_WAIT_MAX_S: goes up anyway
     # cavalry that can dismount (the player's button) is told to, once (bridge probe); other cavalry just waits
     ex3 = Executor(2, TIMINGS, {**STATS, cav.type: {**STATS.get(cav.type, {}), "traits": ["can dismount"]}})
     ex3.set_buildings(blds)
@@ -398,6 +400,52 @@ def test_assault():
     march = {"groups": [{"units": [10, 11, 12, 13], "task": "move", "position": [0, 130]}]}
     assert goes_forward(march, out, 2) and not goes_forward(march, out, 2, siege_attack=True)
     assert goes_forward({"groups": [{"units": [10, 11, 12, 13], "task": "assault"}]}, out, 2, siege_attack=True)
+
+
+def test_assault_wave_and_gun_reach():
+    import math as m
+    # two rings: outer radius 120 (alt 0), inner radius 50 (alt 8)
+    blds = {i + 1: {"id": i + 1, "name": f"castle_wall_{i}", "owner": 1, "x": 120 * m.sin(m.radians(i * 10)),
+                    "y": 120 * m.cos(m.radians(i * 10)), "z": 0, "hp": 1} for i in range(36)}
+    blds.update({50 + i: {"id": 50 + i, "name": f"castle_wall_in_{i}", "owner": 1, "x": 50 * m.sin(m.radians(i * 30)),
+                          "y": 50 * m.cos(m.radians(i * 30)), "z": 8, "hp": 1} for i in range(12)})
+    # siege 184847: climbers went up the last ring one at a time; now they gather and go together
+    inf = [unit(10 + i, 2, 80 * m.sin(m.radians(i * 20)), 80 * m.cos(m.radians(i * 20)), "inf", 160,
+                "Inf_Spear_Yari_Ashigaru") for i in range(5)]
+    foe = unit(30, 1, 0, 0, "inf", 100, "Inf_Missile_Bow_Ashigaru", True)
+    far = unit(14, 2, 0, -300, "inf", 160, "Inf_Spear_Yari_Ashigaru")   # still outside
+    us = inf[:4] + [far, foe]
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    ex.set_plan(plan_of(group([10, 11, 12, 14], task="assault")), us, 0)
+    o = {x["unit"]: x for x in ex.tick(us, 0)[1]}
+    assert all(o[i]["cmd"] == "halt" for i in (10, 11, 12)) and o[14]["cmd"] == "climb", o  # 3 of 4: wait
+    ex.tick(us, 1)
+    assert "3/4" in ex.unit_note(10), ex.unit_note(10)
+    us = inf[:4] + [foe]                           # 13, also over the outer ring, joins the group
+    ex.set_plan(plan_of(group([10, 11, 12, 13], task="assault")), us, 5)
+    o = {x["unit"]: x for x in ex.tick(us, 5)[1]}
+    o = o | {x["unit"]: x for x in ex.tick(us, 6)[1]}
+    assert all(o[i]["cmd"] == "climb" and o[i]["building"] >= 50 for i in (10, 11, 12, 13)), o  # together
+    # a waiting climber fights an enemy that comes up to it instead of standing still
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    near = unit(31, 1, inf[0].x + 20, inf[0].y, "inf", 100, "Inf_Spear_Yari_Ashigaru")
+    ex.set_plan(plan_of(group([10, 14], task="assault")), [inf[0], far, near], 0)
+    o = {x["unit"]: x for x in ex.tick([inf[0], far, near], 0)[1]}
+    assert o[10]["cmd"] == "attack" and o[10]["target"] == 31, o
+    # guns out of range of their target move into range first, then fire (siege 184847: 20 min, one shot)
+    gun = unit(40, 2, 0, -500, "art", 40, "Boshin_Art_Armstrong_Guns")
+    gun.range = 400.0
+    tgt = unit(32, 1, 0, -20, "inf", 100, "Inf_Spear_Yari_Ashigaru")
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan_of(group([40], target=32)), [gun, tgt], 0)
+    o = ex.tick([gun, tgt], 0)[1]
+    assert o and o[0]["cmd"] == "move" and abs(o[0]["y"] - (-20 - 370)) < 1 and abs(o[0]["x"]) < 1, o
+    assert "into range" in ex.unit_note(40)
+    gun.y = -380
+    o = ex.tick([gun, tgt], 30)[1]
+    assert o and o[0]["cmd"] == "attack" and o[0]["target"] == 32, o
 
 
 def test_dismounted_cavalry_climbs():

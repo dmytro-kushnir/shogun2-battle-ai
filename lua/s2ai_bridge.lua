@@ -335,10 +335,12 @@ end
 -- ------------------------------------------------------------------ orders
 
 local DISMOUNT_WAYS -- the dismount probe's candidates, below HANDLERS
+local limber_probe -- below HANDLERS
 
 local HANDLERS = {
 	move = function(uc, o)
 		local run = o.run == true
+		limber_probe(uc, o)
 		if o.facing then
 			-- the unit can be gone from the battle by now (destroyed): fall back to a default width
 			local e = B.units[o.unit]
@@ -463,6 +465,63 @@ DISMOUNT_WAYS = { -- assigns the local declared above HANDLERS
 	{ "change_formation(\"dismounted\")", function(uc) uc:change_formation("dismounted") end },
 	{ "perform_special_ability(\"dismount_capture\")", function(uc) uc:perform_special_ability("dismount_capture") end },
 }
+
+-- PROBE: guns that have unlimbered ignore goto orders (recordings 20261110-055410, 20261119-184847: dozens of
+-- moves accepted, 0 m moved; the player's own move packs the gun up first). Before a gun's move, one of the likely
+-- ways to limber it is tried (LIMBER_WAYS[B.limber_way]); ~16 s later (the executor re-sends the move within that
+-- time) the tick logs whether the gun moved, and if it did not, the next gun move tries the next way. A way that
+-- works is kept for every later gun move.
+local LIMBER_WAYS = {
+	{ "change_formation(\"limber\")", function(uc) uc:change_formation("limber") end },
+	{ "change_formation(\"limbered\")", function(uc) uc:change_formation("limbered") end },
+	{ "perform_special_ability(\"limber\")", function(uc) uc:perform_special_ability("limber") end },
+	{ "halt()", function(uc) uc:halt() end },
+}
+local LIMBER_CHECK_TICKS = 32
+local LIMBER_MOVED_M = 3
+
+limber_probe = function(uc, o) -- assigns the local declared above HANDLERS
+	local e = B.units[o.unit]
+	if not e or e.ship or not call(e.unit, "is_artillery") then return end
+	if not B.limber_methods_logged then
+		B.limber_methods_logged = true
+		log("limber probe: gun controller methods: " .. method_names(uc))
+	end
+	B.limber_check = B.limber_check or {}
+	if B.limber_check[o.unit] then return end -- a way is being checked on this gun: just the move
+	if call(e.unit, "is_moving") then return end
+	local p = call(e.unit, "position")
+	local x, y = p and call(p, "get_x"), p and call(p, "get_z")
+	if not x or math.sqrt((o.x - x) ^ 2 + (o.y - y) ^ 2) < 10 then return end
+	local idx = B.limber_found or B.limber_way or 1
+	local way = LIMBER_WAYS[idx]
+	if not way then return end -- every way tried, none worked
+	local ok, err = pcall(way[2], uc)
+	if B.limber_found then return end
+	log("limber probe: gun " .. tostring(o.unit) .. " " .. way[1] .. (ok and " accepted" or (" refused: " .. tostring(err))))
+	B.limber_check[o.unit] = { due = B.tick + LIMBER_CHECK_TICKS, way = idx, x = x, y = y }
+end
+
+local function check_limbers()
+	for id, c in pairs(B.limber_check or {}) do
+		if B.tick >= c.due then
+			B.limber_check[id] = nil
+			local e = B.units[id]
+			local p = e and call(e.unit, "position")
+			local x, y = p and call(p, "get_x"), p and call(p, "get_z")
+			local moved = x and math.sqrt((x - c.x) ^ 2 + (y - c.y) ^ 2) or 0
+			local way = LIMBER_WAYS[c.way]
+			local works = moved >= LIMBER_MOVED_M
+			log(string.format("limber probe result: gun %s after %s: moved %.1f m%s", tostring(id),
+				way and way[1] or "?", moved, works and " -> MOVES" or ""))
+			if works then
+				B.limber_found = B.limber_found or c.way
+			elseif not B.limber_found and (B.limber_way or 1) == c.way then
+				B.limber_way = c.way + 1
+			end
+		end
+	end
+end
 
 local function check_dismounts()
 	for id, c in pairs(B.dismount_check or {}) do
@@ -730,6 +789,7 @@ function S2AI_Bridge_Tick()
 		local known = B.units or {}
 		scan()
 		check_dismounts()
+		check_limbers()
 		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
 		-- or the server cannot tell what they are
 		local added = {}
@@ -914,6 +974,7 @@ local function start()
 	B.tick, B.seq, B.controlled, B.phase, B.said = 0, nil, {}, "deployment", nil
 	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n, B.track, B.army_n = nil, nil, false, {}, {}, {}, {}, {}
 	B.naval, B.ship_api_logged, B.ship_logged = false, false, {}
+	B.limber_check, B.limber_methods_logged = {}, false -- unit ids repeat from battle to battle
 
 	local armies = {}
 	local n_units = 0

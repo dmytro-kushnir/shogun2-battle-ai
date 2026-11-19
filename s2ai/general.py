@@ -133,7 +133,13 @@ How to answer:
   men; a single foothold is easy to throw back. attack_building on a shut gate is slow - climbing next to it is
   usually faster. Hill castles have several levels: once over the outer wall, climb the next ring at once (the
   report lists climb points per level) - do not stop between rings where the upper walls shoot down at you. Keep
-  going to the top level and occupy it.
+  going to the top level and occupy it. The top is where the defender makes his stand: units that reach it one at
+  a time break within seconds. So task assault gathers its climbers below the last ring and sends them up
+  together (a unit "waiting below the top ring for the assault wave" is doing that - do not pull it out). Put
+  every unit you can spare in that wave, generals included: a general's presence keeps the men around him from
+  breaking, so he goes up WITH the wave, not after it. Do not hold units back below for minutes.
+  Guns: give them an attack on the defenders (massed units on the top, or the walls' defenders); a gun out of
+  range of its target moves into range by itself first.
   Cavalry cannot climb, break gates or reach units ON THE CASTLE (the report marks them). Mounted cavalry has
   nothing to do against walls, so in your FIRST plan of a castle attack use the ability dismount on every
   cavalry unit that has it (keep at most one mounted unit to ride down defenders who come out or run) and put
