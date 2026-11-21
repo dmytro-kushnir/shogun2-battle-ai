@@ -336,11 +336,13 @@ end
 
 local DISMOUNT_WAYS -- the dismount probe's candidates, below HANDLERS
 local limber_probe -- below HANDLERS
+local stuck_watch -- below HANDLERS
 
 local HANDLERS = {
 	move = function(uc, o)
 		local run = o.run == true
 		limber_probe(uc, o)
+		stuck_watch(o)
 		if o.facing then
 			-- the unit can be gone from the battle by now (destroyed): fall back to a default width
 			local e = B.units[o.unit]
@@ -518,6 +520,80 @@ local function check_limbers()
 				B.limber_found = B.limber_found or c.way
 			elseif not B.limber_found and (B.limber_way or 1) == c.way then
 				B.limber_way = c.way + 1
+			end
+		end
+	end
+end
+
+-- PROBE: reinforcements that march in during the battle can ignore every order (battle 20261121-080322: 16
+-- infantry units of the arriving army, 53-75 moves each, accepted without error, never moved again after the
+-- engine's entry walk; their general and cavalry obeyed; same in 20261113-185839 and -190711). A unit (not a
+-- gun: see the limber probe) that has not moved STUCK_MOVED_M STUCK_CHECK_TICKS after a move over STUCK_MIN_M
+-- gets one of STUCK_WAYS and the move again; the next check logs whether that worked. A way that works is kept.
+local STUCK_CHECK_TICKS = 32
+local STUCK_MOVED_M = 3
+local STUCK_MIN_M = 20
+local function fresh_controller(id)
+	bury(B.controlled[id])
+	B.controlled[id] = nil
+	return take(id)
+end
+local STUCK_WAYS = {
+	{ "new controller", fresh_controller },
+	{ "release_control + new controller", function(id) release(id); return take(id) end },
+	{ "deploy_reinforcement(true) + new controller", function(id)
+		B.units[id].unit:deploy_reinforcement(true)
+		return fresh_controller(id)
+	end },
+}
+
+local function unit_xy(id)
+	local e = B.units[id]
+	local p = e and call(e.unit, "position")
+	if not p then return nil end
+	return call(p, "get_x"), call(p, "get_z")
+end
+
+stuck_watch = function(o) -- assigns the local declared above HANDLERS
+	local e = B.units[o.unit]
+	if not e or e.ship or call(e.unit, "is_artillery") then return end
+	B.stuck_check = B.stuck_check or {}
+	if B.stuck_check[o.unit] then return end
+	if call(e.unit, "is_moving") then return end
+	local x, y = unit_xy(o.unit)
+	if not x or math.sqrt((o.x - x) ^ 2 + (o.y - y) ^ 2) < STUCK_MIN_M then return end
+	B.stuck_check[o.unit] = { due = B.tick + STUCK_CHECK_TICKS, x = x, y = y, o = o }
+end
+
+local function check_stuck()
+	for id, c in pairs(B.stuck_check or {}) do
+		if B.tick >= c.due then
+			B.stuck_check[id] = nil
+			local e = B.units[id]
+			local x, y = unit_xy(id)
+			local moved = x and math.sqrt((x - c.x) ^ 2 + (y - c.y) ^ 2) or 0
+			local gone = not e or not on_field(id) or call(e.unit, "is_routing") or not B.controlled[id]
+			if c.way then -- a way was tried: did the unit move since?
+				local works = moved >= STUCK_MOVED_M
+				log(string.format("stuck probe result: unit %s after %s: moved %.1f m%s", tostring(id),
+					STUCK_WAYS[c.way][1], moved, works and " -> MOVES" or ""))
+				if works then
+					B.stuck_found = B.stuck_found or c.way
+				elseif not B.stuck_found and (B.stuck_way or 1) == c.way then
+					B.stuck_way = c.way + 1
+				end
+			elseif not gone and moved < STUCK_MOVED_M and not call(e.unit, "is_moving") then
+				local idx = B.stuck_found or B.stuck_way or 1
+				local way = STUCK_WAYS[idx]
+				if way then
+					local ok, uc = pcall(way[2], id)
+					local sent = ok and uc and pcall(HANDLERS.move, uc, c.o)
+					log(string.format("stuck probe: unit %s moved %.1f m in %d s after a move %.0f m away; %s %s",
+						tostring(id), moved, STUCK_CHECK_TICKS * TICK_MS / 1000,
+						math.sqrt((c.o.x - c.x) ^ 2 + (c.o.y - c.y) ^ 2), way[1],
+						sent and "done, move re-sent" or ("failed: " .. tostring(uc))))
+					B.stuck_check[id] = { due = B.tick + STUCK_CHECK_TICKS, x = x, y = y, o = c.o, way = idx }
+				end
 			end
 		end
 	end
@@ -790,6 +866,7 @@ function S2AI_Bridge_Tick()
 		scan()
 		check_dismounts()
 		check_limbers()
+		check_stuck()
 		-- units that were not there before (reinforcements arriving, armies joining): send their static info,
 		-- or the server cannot tell what they are
 		local added = {}
@@ -975,6 +1052,7 @@ local function start()
 	B.beat, B.beat_tick, B.over, B.static_sent, B.keys, B.next_n, B.track, B.army_n = nil, nil, false, {}, {}, {}, {}, {}
 	B.naval, B.ship_api_logged, B.ship_logged = false, false, {}
 	B.limber_check, B.limber_methods_logged = {}, false -- unit ids repeat from battle to battle
+	B.stuck_check = {}
 
 	local armies = {}
 	local n_units = 0

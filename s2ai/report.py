@@ -69,11 +69,44 @@ SHIP_HULL_DANGER = 0.15
 IDLE_WARN_S = 75.0
 
 
+# Reinforcements waiting off the map all sit still on one point from the start (battle 20261121-080322: 18
+# units within 6 m of (-216,-644), behind the player) until the engine marches them in. Units in melee also bunch
+# up (every recording has such moments), so a unit counts as waiting only if it was in such a stack when first
+# seen and has not left that spot since.
+RESERVE_STACK_M = 4.0
+RESERVE_STACK_N = 3
+RESERVE_LEFT_M = 20.0
+
+
+def reserve_ids(state: dict, static: dict[int, dict]) -> set[int]:
+    """Units still off the map. Unit ids are alliance * 10000 + n. Keeps each unit's first sighting in its
+    static entry ("_first": (x, y, stacked))."""
+    pts = [(s["id"], s["x"], s["y"]) for s in state["units"]
+           if s.get("x") is not None and not s.get("gone") and (s.get("men") or 0) > 0]
+    out = set()
+    for i, x, y in pts:
+        st = static.get(i)
+        if st is None:
+            continue
+        if "_first" not in st:
+            near = sum(1 for j, x2, y2 in pts
+                       if j // 10000 == i // 10000 and abs(x2 - x) < RESERVE_STACK_M and abs(y2 - y) < RESERVE_STACK_M)
+            st["_first"] = (x, y, near >= RESERVE_STACK_N)
+        fx, fy, stacked = st["_first"]
+        if stacked and math.hypot(x - fx, y - fy) < RESERVE_LEFT_M:
+            out.add(i)
+        elif stacked:
+            st["_first"] = (fx, fy, False)  # arrived for good
+    return out
+
+
 def merge(static: dict[int, dict], state: dict) -> list[U]:
+    """Units on the field; reinforcements still off the map are left out (reserve_ids)."""
     units = []
+    reserve = reserve_ids(state, static)
     for s in state["units"]:
         st = static.get(s["id"])
-        if st is None or s.get("x") is None:
+        if st is None or s.get("x") is None or s["id"] in reserve:
             continue
         t = st.get("type") or "?"
         # the live flag wins: dismounted cavalry fights (and climbs) as infantry
@@ -586,6 +619,10 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
     attacking = side == "attack"
     out.extend(assault_section(forts, ai, ours, theirs) if attacking else fort_section(forts, ai))
     out.extend(battery_section(bats, ai, ours))
+    waiting = [i for i in reserve_ids(state, static) if i // 10000 == ai]
+    if waiting:
+        out.append(f"REINFORCEMENTS: {len(waiting)} of your units are still off the map; they march in from a "
+                   "map edge by themselves and can be ordered once they appear in the unit list.")
     if idle_s is not None and idle_s >= IDLE_WARN_S and side != "defend":
         out.append("")
         if attacking:

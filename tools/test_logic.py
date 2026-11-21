@@ -469,6 +469,29 @@ def test_dismounted_cavalry_climbs():
     assert o and o[0]["cmd"] == "climb", o
 
 
+def test_reinforcements_off_the_map():
+    from s2ai import report
+    # battle 20261121-080322: the arriving army waits on one point behind the player, then marches in
+    static = {i: {"id": i, "alliance": 2, "type": "Inf_Spear_Yari_Ashigaru", "men0": 200} for i in (20002, 20003, 20004)}
+    static[20001] = {"id": 20001, "alliance": 2, "type": "Gen_Hatamoto", "men0": 60}
+    static[10001] = {"id": 10001, "alliance": 1, "type": "Inf_Spear_Yari_Ashigaru", "men0": 200}
+    waiting = {"t": 5, "phase": "conflict", "units": [
+        {"id": 20001, "x": 0, "y": 271, "men": 60}, {"id": 10001, "x": 0, "y": -275, "men": 200},
+        {"id": 20002, "x": -215.8, "y": -640.6, "men": 200}, {"id": 20003, "x": -215.9, "y": -644.4, "men": 200},
+        {"id": 20004, "x": -215.6, "y": -643.3, "men": 200}]}
+    assert report.reserve_ids(waiting, static) == {20002, 20003, 20004}
+    assert [u.id for u in report.merge(static, waiting)] == [20001, 10001]
+    text, _ = report.build(static, waiting, 2, [], None, 0)
+    assert "REINFORCEMENTS: 3 of your units" in text, text
+    arrived = {"t": 40, "phase": "conflict", "units": waiting["units"][:2] + [
+        {"id": 20002, "x": 620, "y": 150, "men": 200}, {"id": 20003, "x": 620, "y": 200, "men": 200},
+        {"id": 20004, "x": 620, "y": 250, "men": 200}]}
+    assert report.reserve_ids(arrived, static) == set() and len(report.merge(static, arrived)) == 5
+    # units that bunch up in melee later are not waiting off the map
+    melee = {"t": 300, "phase": "conflict", "units": [dict(u, x=100 + k % 2, y=100) for k, u in enumerate(arrived["units"])]}
+    assert report.reserve_ids(melee, static) == set()
+
+
 def test_assault_top_and_dismount_ability():
     import math as m
     from s2ai.gamedata import game_data
