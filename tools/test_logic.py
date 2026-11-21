@@ -559,16 +559,16 @@ def test_sieges_to_game_ai():
                                                          {"id": 9, "x": 0, "y": 0, "men": 100}]}
     castle = {1: {"id": 1, "name": "castle_02_wall_10_01", "mil": True, "x": 0, "y": 50, "owner": 1}}
     siege = SimpleNamespace(static=static, state=state, phase="conflict", buildings=castle, events=[])
-    gc = GeneralCommander(2, None, "t", board, link)
-    assert gc.decide(siege) == ([], []) and gc.siege == "attack"          # the game's AI keeps every unit
+    gc = GeneralCommander(2, None, "t", board, link, sieges="game")
+    assert gc.decide(siege) == ([], []) and gc.siege == "attack"          # --sieges game: the game's AI keeps all
     assert gc.extra_summary()["siege_by"] == "game"
     early = {**state, "t": 5.0, "phase": "deployment"}   # before planning starts
     field = SimpleNamespace(static=static, state=early, phase="deployment", buildings={}, events=[])
     gc = GeneralCommander(2, None, "t", board, link)
     assert gc.decide(field) is None and gc.siege == ""                    # a field battle: business as usual
-    gc = GeneralCommander(2, None, "t", board, link, sieges="claude")
+    gc = GeneralCommander(2, None, "t", board, link)
     siege.phase, siege.state = "deployment", early
-    assert gc.decide(siege) is None and gc.siege == "attack"              # --sieges claude: the general plans
+    assert gc.decide(siege) is None and gc.siege == "attack"              # default: the general plans
 
 
 def test_ai_alliance():

@@ -194,7 +194,7 @@ class GeneralCommander:
     """The LLM plans in a background thread; the executor carries the latest plan out every tick."""
 
     def __init__(self, ai: int, general, battle_id: str, board: Board, link: GameLink,
-                 min_plan_s: float = 0.0, far_plan_s: float = 0.0, sieges: str = "game"):
+                 min_plan_s: float = 0.0, far_plan_s: float = 0.0, sieges: str = "claude"):
         self.ai, self.general, self.battle_id, self.board, self.link = ai, general, battle_id, board, link
         self.min_plan_s, self.far_plan_s = min_plan_s, far_plan_s
         self.sieges = sieges              # "game": a siege is left to the game's own AI; "claude": the general
@@ -223,9 +223,9 @@ class GeneralCommander:
         state = battle.state
         if state is None:
             return None
-        # Sieges go to the game's own battle AI (--sieges game): six test sieges with our own assault logic and
-        # with the game's planner per group (20261113-193825 .. 20261114-101605) went badly; the game already
-        # knows its castles. The general commands field and naval battles.
+        # The general commands sieges too (default since the assault waves and ring fixes, sieges 20261119-184847
+        # and 20261121-083253 were close fights). --sieges game leaves them to the game's own battle AI, which
+        # knows its castles (our first six test sieges, 20261113-193825 .. 20261114-101605, went badly).
         if self.siege is None and battle.buildings is not None:
             self.siege = report.siege_side(report.fortifications(battle.buildings), self.ai) or ""
             if self.siege and self.sieges == "game":
@@ -373,8 +373,8 @@ def main() -> None:
                     help="never plan more often than this (the general asks for 4-30 s)")
     ap.add_argument("--far-plan-s", type=float, default=15.0,
                     help=f"while the armies are over {FAR_M:.0f} m apart, plan at most this often (0 = off)")
-    ap.add_argument("--sieges", choices=["game", "claude"], default="game",
-                    help="who commands sieges: the game's own AI (default) or the general")
+    ap.add_argument("--sieges", choices=["claude", "game"], default="claude",
+                    help="who commands sieges: the general (default) or the game's own AI (--sieges game)")
     ap.add_argument("--ai-alliance", type=int, help="alliance index (1-based) the server commands")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--lan", action="store_true",
