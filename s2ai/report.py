@@ -191,7 +191,8 @@ def fort_section(forts: list[dict], ai: int) -> list[str]:
     order = {"gate": 0, "keep": 1, "tower": 2, "wall": 3, "battery": 4, "building": 5}
     for f in sorted(forts, key=lambda f: (order[f["kind"]], f["id"])):
         hp = f.get("hp")
-        dmg = f" health {hp:.0%}" if isinstance(hp, (int, float)) and hp < 0.999 else ""
+        dmg = (" unusable (health 0: no way through or up)" if isinstance(hp, (int, float)) and hp < 0.05 else
+               f" health {hp:.0%}" if isinstance(hp, (int, float)) and hp < 0.999 else "")
         gar = " GARRISONED" if f.get("gar") else ""
         out.append(f"  b{f['id']:<4} {f['kind']:<6} at ({f['x']:5.0f},{f['y']:5.0f}) alt {f.get('z') or 0:4.0f} "
                    f"holds {f.get('cap') or 0:>3} men, {side(f.get('owner'))}{dmg}{gar}")
@@ -242,8 +243,8 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
     xs, ys = [f["x"] for f in forts], [f["y"] for f in forts]
     out = ["", f"SIEGE - YOU ATTACK. Castle x {min(xs):.0f}..{max(xs):.0f}, y {min(ys):.0f}..{max(ys):.0f}; the "
                f"keep / top level (take it with task occupy) is about ({cx:.0f},{cy:.0f}).",
-           "  Simplest: task assault (each infantry unit climbs its own spread-out section, ring by ring) or "
-           "ai_assault (the game's own battle AI storms with the group). The climb points below are for climb "
+           "  Use task assault (each infantry unit climbs its own spread-out section, ring by ring); ai_assault "
+           "(the game's own battle AI) only if an assault has failed. The climb points below are for climb "
            "orders of your own; a unit that has climbed stays on its wall until you send it on."]
     shooters = [e for e in (theirs or []) if e.fighting_fit and e.missile and e.range]
     if shooters:
@@ -255,8 +256,10 @@ def assault_section(forts: list[dict], ai: int, ours: list["U"], theirs: list["U
     gaps = [f for f in forts if broken(f) and f["kind"] in ("gate", "wall")]
     if gaps:
         # siege 20261113-201310: units sent through pieces at health 0 stopped short - no path in
-        out.append(f"  {len(gaps)} gates / wall pieces are damaged (health 0), but units cannot march through them: "
-                   "climb.")
+        # sieges 20261121-090150 / -095125: half the castle read health 0 from the first second, yet every unit
+        # (ours and the game's AI) got in over or through pieces at full health - those are not gaps
+        out.append(f"  {len(gaps)} gates / wall pieces are unusable (the game reports health 0): no unit gets through "
+                   "or up there. Climb the others.")
     if len(levels) > 1:
         out.append(f"  The castle has {len(levels)} levels (rings of walls), outer first: "
                    + ", ".join(f"alt {min(f.get('z') or 0 for f in lv):.0f}-{max(f.get('z') or 0 for f in lv):.0f}"
@@ -627,7 +630,7 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
         out.append("")
         if attacking:
             out.append(f"TEMPO: no assault for {idle_s:.0f}s - marching to staging points does not count. Put most "
-                       "of your infantry in a group with task assault or ai_assault NOW, with missile units "
+                       "of your infantry in a group with task assault NOW, with missile units "
                        "shooting the defenders above them. Every minute outside the walls is a minute under their "
                        "fire.")
         else:

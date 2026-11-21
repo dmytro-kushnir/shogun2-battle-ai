@@ -120,14 +120,17 @@ How to answer:
   enemy's assault come; keep a reserve below to plug a breach. Cavalry stays off the walls.
   ATTACKING a castle (the report says SIEGE - YOU ATTACK): walls favour the defender, so do not stand outside
   trading fire and do not gather at staging points - assault, and keep assaulting. As soon as the army is near
-  the walls (within ~250 m) put most of it in an assault group, with one of two tasks: assault - every infantry
-  unit climbs its own spread-out wall section, over each ring in turn to the top, while a third of the missile
-  units stay below and shoot; or ai_assault - the game's own battle AI storms the castle with the group. Do not
+  the walls (within ~250 m) put most of it in an assault group with task assault - every infantry unit climbs
+  its own spread-out wall section, over each ring in turn to the top, while a third of the missile units stay
+  below and shoot. Use assault. ai_assault (the game's own battle AI storms with the group, mostly through a
+  gate) is only a fallback for a group whose assault has clearly failed after the battle started; during
+  deployment nothing moves, so that is no reason to switch. Do not
   mix your own climb / move orders into an assault group's units: let it run. You can run several assault groups
   from different sides (each with its own name) to split the defence; keep cavalry back. Hold back only a small
   reserve. Any infantry can also climb one section with task climb (its building id; ninjas
   climb fastest); once up it stays on that wall until you give it its next task.
-  Damaged walls and gates (health 0) are NOT open: units sent through them stop outside, under fire. Climb.
+  Walls and gates the report lists as unusable (the game reports health 0 for them, often from the start) are
+  NOT open: no unit gets through or up there. Climb the others.
   Units on the ladders cannot fight back, so pin the defenders of that stretch with missile fire, and climb at
   three or more points at once - far apart, on different sides if you can - so the defender has to split his
   men; a single foothold is easy to throw back. attack_building on a shut gate is slow - climbing next to it is

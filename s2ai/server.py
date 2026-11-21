@@ -39,7 +39,8 @@ log = logging.getLogger("s2ai")
 
 POLL_S = 0.25
 HEARTBEAT_S = 3.0
-START_PLANNING_AFTER_S = 120  # if the conflict-phase event never arrives
+START_PLANNING_AFTER_S = 900  # if the conflict-phase event never arrives (it came in all 31 battles since
+#                               20261113; at 120 s the general planned 9 times during a 460 s deployment, 20261121-090150)
 FAIL_HANDBACK = 3             # failed plans in a row before the army goes back to the game's AI
 FAR_M = 300.0                 # armies this far apart: plan at most every --far-plan-s
 

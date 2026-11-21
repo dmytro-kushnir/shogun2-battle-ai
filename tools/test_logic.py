@@ -247,7 +247,7 @@ def test_siege_assault_and_tempo():
     walls[38] = {"id": 38, "name": "castle_gate_01", "owner": 2, "x": 66, "y": 0, "hp": 1, "mil": True, "cap": 68}
     text, units = report.build(static, state, 1, [], None, None, walls, idle_s=120)
     assert "SIEGE - YOU ATTACK" in text and "FORTIFICATIONS" not in text, text
-    assert "1 gates / wall pieces are damaged" in text and "cannot march through" in text, text
+    assert "1 gates / wall pieces are unusable" in text and "no unit gets through" in text, text
     # climb points are spread out (walls here are 20 m apart in a row): 5 points, 60 m+ apart
     pts = [ln for ln in text.splitlines() if " wall  at" in ln]
     assert len(pts) == 5, text

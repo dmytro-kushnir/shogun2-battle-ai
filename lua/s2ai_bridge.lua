@@ -485,6 +485,7 @@ local LIMBER_MOVED_M = 3
 limber_probe = function(uc, o) -- assigns the local declared above HANDLERS
 	local e = B.units[o.unit]
 	if not e or e.ship or not call(e.unit, "is_artillery") then return end
+	if B.phase ~= "conflict" then return end -- nothing moves while deploying
 	if not B.limber_methods_logged then
 		B.limber_methods_logged = true
 		log("limber probe: gun controller methods: " .. method_names(uc))
@@ -501,6 +502,12 @@ limber_probe = function(uc, o) -- assigns the local declared above HANDLERS
 	local ok, err = pcall(way[2], uc)
 	if B.limber_found then return end
 	log("limber probe: gun " .. tostring(o.unit) .. " " .. way[1] .. (ok and " accepted" or (" refused: " .. tostring(err))))
+	if not ok then
+		-- refused: it cannot be what makes the gun move (battle 20261121-090150: change_formation("limber") was
+		-- refused, the gun moved anyway and the way was kept); next way next time
+		if (B.limber_way or 1) == idx then B.limber_way = idx + 1 end
+		return
+	end
 	B.limber_check[o.unit] = { due = B.tick + LIMBER_CHECK_TICKS, way = idx, x = x, y = y }
 end
 
@@ -557,6 +564,8 @@ end
 stuck_watch = function(o) -- assigns the local declared above HANDLERS
 	local e = B.units[o.unit]
 	if not e or e.ship or call(e.unit, "is_artillery") then return end
+	-- nothing moves while deploying (battle 20261121-090150: 9 false alarms in a 460 s deployment)
+	if B.phase ~= "conflict" then return end
 	B.stuck_check = B.stuck_check or {}
 	if B.stuck_check[o.unit] then return end
 	if call(e.unit, "is_moving") then return end
