@@ -30,6 +30,7 @@ ON_WALL_UP_M = 3.0
 # climbs ring after ring; a third of the missile infantry stays below and shoots.
 ASSAULT_SPREAD_M = 45.0  # climb points at least this far apart
 ASSAULT_INSIDE_M = 12.0  # a unit this much closer to the castle centre than a ring's piece is past that ring
+ASSAULT_OUTSIDE_M = 8.0  # ... and this much farther out, below the wall, is outside it again
 ASSAULT_SHOOT_SHARE = 1 / 3  # of the group's missile infantry stays below and shoots
 ASSAULT_SHARE_PENALTY_M = 25.0  # inner rings: a piece another unit climbs counts as this much farther
 CLIMB_MAX_SENDS = 4      # climb orders to one piece before the unit gives it up and tries another
@@ -298,12 +299,21 @@ class Executor:
         ud = math.hypot(u.x - cx, u.y - cy)
         # levels it is past: closer to the centre than that ring's piece next to it, or up on its own piece
         cur = self.buildings.get(self.assault_slot.get(u.id, -1))
+        inside = set()  # rings it is past on the ground (not just up on the wall)
         for i, lv in enumerate(levels):
             p = min(lv, key=lambda f: math.hypot(u.x - f["x"], u.y - f["y"]))
-            if ud < math.hypot(p["x"] - cx, p["y"] - cy) - ASSAULT_INSIDE_M:
+            pd = math.hypot(p["x"] - cx, p["y"] - cy)
+            if ud < pd - ASSAULT_INSIDE_M:
                 done.add(i)
+                inside.add(i)
             if cur is not None and any(f["id"] == cur["id"] for f in lv) and self._on_piece(u, cur):
                 done.add(i)
+            if i in done and ud > pd + ASSAULT_OUTSIDE_M and u.z < (p.get("z") or 0) + ON_WALL_UP_M:
+                # back outside, below the wall (siege 20261121-083253: units halted on the outer wall went back
+                # down outside, and were then sent at the inner ring - ignored for 10+ minutes): this ring and
+                # every one inside it again
+                done.difference_update(range(i, len(levels)))
+                break
         todo = [i for i in range(len(levels)) if i not in done]
         if not todo:
             # over every ring: fight the defenders up here (siege 20261114-105902: a unit told to occupy stood
@@ -330,6 +340,10 @@ class Executor:
                 if close:  # waiting is no reason to stand still in a fight
                     foe = self._best_target(u, close)
                     return {"cmd": "attack", "unit": u.id, "target": foe.id, "run": True, "_sig": f"attack:{foe.id}"}
+                if not all(i in inside for i in range(last)):
+                    # still up on the wall it climbed: a halt there sends it back down OUTSIDE (siege
+                    # 20261121-083253); no new order, it waits up there
+                    return None
                 return {"cmd": "halt", "unit": u.id, "_sig": "wave"}
             self.wave_go.add(u.id)
             self.wave_wait.pop(u.id, None)

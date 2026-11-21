@@ -434,6 +434,21 @@ def test_assault_wave_and_gun_reach():
     ex.set_plan(plan_of(group([10, 14], task="assault")), [inf[0], far, near], 0)
     o = {x["unit"]: x for x in ex.tick([inf[0], far, near], 0)[1]}
     assert o[10]["cmd"] == "attack" and o[10]["target"] == 31, o
+    # siege 20261121-083253: a unit up on the outer wall is not halted (that sent it back down outside), and one
+    # that is back outside below the wall climbs the outer ring again, not the inner one
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_buildings(blds)
+    wall = unit(15, 2, 0, -300, "inf", 160, "Inf_Spear_Yari_Ashigaru")
+    ex.set_plan(plan_of(group([15, 14], task="assault")), [wall, far, foe], 0)
+    o = {x["unit"]: x for x in ex.tick([wall, far, foe], 0)[1]}
+    piece = blds[o[15]["building"]]
+    assert o[15]["cmd"] == "climb" and piece["z"] == 0, o
+    wall.x, wall.y, wall.z = piece["x"], piece["y"], 6.0          # up on its piece
+    o = {x["unit"]: x for x in ex.tick([wall, far, foe], 2)[1]}
+    assert 15 not in o and "waiting" in ex.unit_note(15), o
+    wall.x, wall.y, wall.z = piece["x"] * 1.15, piece["y"] * 1.15, -3.0   # back down outside
+    o = {x["unit"]: x for x in ex.tick([wall, far, foe], 25)[1]}  # the climb is repeated after CLIMB_RETRY_S
+    assert o[15]["cmd"] == "climb" and blds[o[15]["building"]]["z"] == 0, o
     # guns out of range of their target move into range first, then fire (siege 184847: 20 min, one shot)
     gun = unit(40, 2, 0, -500, "art", 40, "Boshin_Art_Armstrong_Guns")
     gun.range = 400.0
