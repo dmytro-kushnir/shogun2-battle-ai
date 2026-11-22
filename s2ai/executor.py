@@ -50,7 +50,10 @@ GUN_RANGE_MARGIN_M = 30.0
 # Tasks the game's own tactical AI carries out for a group (one planner per group in the bridge): the general
 # chooses units and objective, the game does the pathing, climbing and fighting. Siege 20261114-101605: four
 # planners on one alliance, capture_settlement() accepted by each.
-GAME_AI_TASKS = {"ai_assault": "capture"}
+# ai_attack / ai_defend: the same planner's attack_unit / defend_position, offered to the general in field
+# battles and sieges alike (the bridge has had them since the group planners came in).
+GAME_AI_TASKS = {"ai_assault": "capture", "ai_attack": "attack", "ai_defend": "defend"}
+GAME_AI_DEFEND_RADIUS_M = 100.0
 GAME_AI_REISSUE_S = 30.0  # repeat a group's objective this often (the planner may settle on a target and stop)
 
 
@@ -138,6 +141,7 @@ class Executor:
         self.pullbacks: list[dict] = []                         # every pull-back: {t, unit, target}
         self.shot: dict[int, str] = {}                          # ship -> shot type we last told it to load
         self.group_issued: dict[str, tuple[str, float]] = {}    # game-AI group -> (signature, battle time sent)
+        self.defend_at: dict[str, tuple[float, float]] = {}     # ai_defend group -> the point it holds
         self.assault_slot: dict[int, int] = {}                  # assaulting unit -> wall piece it climbs
         self.assault_done: dict[int, set[int]] = {}             # assaulting unit -> castle levels it is past
         self.dismount_sent: set[int] = set()                     # cavalry told to dismount (once each)
@@ -190,11 +194,16 @@ class Executor:
         problems = []
         self.pending_abilities = []
         game_ai = {i for g in plan["groups"] if g["task"] in GAME_AI_TASKS for i in g["units"]}
+        # an ai_defend group without a position keeps the point it was given (re-taking its centre every plan
+        # would let the point drift with the fighting); a position from the general always wins
+        self.defend_at = {g["name"]: (tuple(g["position"]) if g.get("position") else self.defend_at[g["name"]])
+                          for g in plan["groups"] if g["task"] == "ai_defend"
+                          and (g.get("position") or g["name"] in self.defend_at)}
         for a in plan.get("abilities") or []:
             st, left = self.ability_status(a["unit"], a["ability"], t)
             if a["unit"] in game_ai:
                 # the game's AI runs that unit: we hold no controller for it (siege 20261114-110635: 5 refused)
-                problems.append(f"ability {a['ability']} on {a['unit']}: the unit is in an ai_assault group (the "
+                problems.append(f"ability {a['ability']} on {a['unit']}: the unit is in a game-AI group (the "
                                 f"game's AI decides its abilities); not sent")
             elif st == "ready":
                 self.pending_abilities.append(a)
@@ -414,23 +423,35 @@ class Executor:
             if g["task"] not in GAME_AI_TASKS:
                 continue
             members = sorted(i for i in g["units"] if i in fit)
-            if not members or not enemies:
+            if not members or (not enemies and g["task"] != "ai_defend"):
                 continue
             gx = sum(fit[i].x for i in members) / len(members)
             gy = sum(fit[i].y for i in members) / len(members)
-            if forts:
+            if g["task"] == "ai_defend":
+                (x, y) = self.defend_at.setdefault(g["name"], (gx, gy))
+                objective = "defend"
+            elif g["task"] == "ai_attack":
+                x, y, objective = gx, gy, "attack"
+            elif forts:
                 top = [f for f in forts if f["kind"] == "keep"] or castle_levels(forts)[-1]
                 x, y = sum(f["x"] for f in top) / len(top), sum(f["y"] for f in top) / len(top)
                 objective = GAME_AI_TASKS[g["task"]]
             else:
                 x, y, objective = gx, gy, "attack"
-            target = min(enemies, key=lambda e: math.hypot(e.x - gx, e.y - gy))
-            sig = f"{objective}:{members}"
+            by_id = {e.id: e for e in enemies}
+            if g["task"] == "ai_attack" and g.get("target") in by_id:
+                target = by_id[g["target"]]
+            elif enemies:
+                target = min(enemies, key=lambda e: math.hypot(e.x - gx, e.y - gy))
+            else:
+                target = None
+            sig = f"{objective}:{members}:{round(x)}:{round(y)}:{target.id if objective == 'attack' and target else ''}"
             last = self.group_issued.get(g["name"])
             if last is None or last[0] != sig or t - last[1] >= GAME_AI_REISSUE_S:
                 self.group_issued[g["name"]] = (sig, t)
                 out.append({"cmd": "ai_group", "group": g["name"], "units": members, "objective": objective,
-                            "x": round(x, 1), "y": round(y, 1), "radius": 100, "target": target.id})
+                            "x": round(x, 1), "y": round(y, 1), "radius": GAME_AI_DEFEND_RADIUS_M,
+                            "target": target.id if target else None})
         return out
 
     def _group_of(self, uid: int) -> dict | None:

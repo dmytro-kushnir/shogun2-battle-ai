@@ -111,6 +111,13 @@ How to answer:
 - Put every one of your fighting units in exactly one group. Give each group one task.
 - attack: `target` = an enemy id. move: `position` = [x, y] for the group's centre; the units form a line there
   facing `facing` (compass degrees; null = towards the enemy). hold: like move, `position` null = stay where they are.
+- The game's own battle AI can also run a group for you: ai_attack (it attacks, starting with `target` or the
+  nearest enemy, and picks its own targets, formations and flanks after that) and ai_defend (it holds the area
+  within ~100 m of `position`, null = where the group stands, and fights whatever comes in). Hand a group over
+  when the game does that job well by itself - a melee brawl that needs no plan, guarding a flank, a gate or the
+  guns while you manoeuvre elsewhere - and keep groups that carry your plan (flanking rides, a firing line,
+  feints) under your own orders. You get the group back with your next plan. No abilities for those units; no
+  ships.
 - Use the reflexes: infantry lines usually engage_within_m 30-60; missile units keep_range_m 40-80 and
   engage_within_m 0; cavalry in reserve engage_within_m 0 until you commit it.
 - Sieges (a FORTIFICATIONS section is in the report): a position next to a wall is on the ground, NOT on the wall.

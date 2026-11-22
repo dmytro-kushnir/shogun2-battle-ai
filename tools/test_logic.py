@@ -373,7 +373,7 @@ def test_assault():
     ex6.set_buildings(blds)
     probs = ex6.set_plan(plan_of(group([10], task="ai_assault"), abilities=[{"unit": 10, "ability": "rally"}]),
                          us, 0)
-    assert probs and "ai_assault" in probs[0], probs
+    assert probs and "game-AI group" in probs[0], probs
     assert not [o for o in ex6.tick(us, 0)[1] if o["cmd"] == "ability"]
     # a field battle (no castle): the game's AI attacks the nearest enemy with the group
     ex2 = Executor(2, TIMINGS, STATS)
@@ -612,6 +612,49 @@ def test_gameai_opponent():
     assert o[0]["cmd"] == "ai_defend" and o[0]["radius"] == 40, o
     nc = NoCommander(2)
     assert nc.decide(battle) == ([], []) and nc.decide(battle) is None  # releases everything once
+
+
+def test_game_ai_attack_and_defend():
+    # the general can hand any group to the game's AI: ai_attack (its target first) and ai_defend (a point)
+    inf = [unit(10 + i, 2, -60 + 30 * i, -200, "inf", 160, "Inf_Spear_Yari_Ashigaru") for i in range(3)]
+    cav = unit(20, 2, 200, -200)
+    foes = [unit(30, 1, 0, 100, "inf", 100, "Inf_Missile_Bow_Ashigaru", True), unit(31, 1, -300, 300)]
+    us = inf + [cav] + foes
+    raw = plan_of(group([10, 11], task="ai_attack", target=31), group([12], task="ai_defend"),
+                  group([20], target=30))
+    raw["groups"][0]["name"], raw["groups"][1]["name"] = "brawl", "guard"
+    raw["groups"][1]["position"] = [50, -250]
+    plan, probs = validate(raw, {10, 11, 12, 20}, {30, 31}, set(), {})
+    assert not probs and plan["groups"][0]["target"] == 31 and plan["groups"][1]["position"] == [50, -250], probs
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan, us, 0)
+    take, orders = ex.tick(us, 0)
+    assert set(take) == {20}, take                         # only the cavalry stays under our orders
+    grp = {o["group"]: o for o in orders if o["cmd"] == "ai_group"}
+    assert grp["brawl"]["objective"] == "attack" and grp["brawl"]["target"] == 31, grp
+    assert grp["guard"]["objective"] == "defend" and (grp["guard"]["x"], grp["guard"]["y"]) == (50, -250), grp
+    assert not any(o.get("unit") in (10, 11, 12) for o in orders), orders
+    # a dead ai_attack target: validate drops it, the game's AI starts with the nearest enemy
+    plan2, probs = validate(raw, {10, 11, 12, 20}, {30}, set(), {})
+    assert probs and plan2["groups"][0]["target"] is None, probs
+    ex.set_plan(plan2, us, 10)
+    grp = {o["group"]: o for o in ex.tick(us, 10)[1] if o["cmd"] == "ai_group"}
+    assert grp["brawl"]["target"] == 30, grp
+    # ai_defend without a position: where the group stands, and that point stays while it fights
+    raw["groups"][1]["position"] = None
+    plan3, _ = validate(raw, {10, 11, 12, 20}, {30, 31}, set(), {})
+    ex3 = Executor(2, TIMINGS, STATS)
+    ex3.set_plan(plan3, us, 0)
+    g = [o for o in ex3.tick(us, 0)[1] if o.get("group") == "guard"][0]
+    assert (g["x"], g["y"]) == (0, -200), g
+    inf[2].x, inf[2].y = 40, -150
+    ex3.set_plan(plan3, us, 8)
+    g = [o for o in ex3.tick(us, 40)[1] if o.get("group") == "guard"][0]
+    assert (g["x"], g["y"]) == (0, -200), g
+    # no enemies left on the field: a defend group still gets its point
+    ex4 = Executor(2, TIMINGS, STATS)
+    ex4.set_plan(plan3, inf + [cav], 0)
+    assert [o for o in ex4.tick(inf + [cav], 0)[1] if o.get("group") == "guard"]
 
 
 if __name__ == "__main__":

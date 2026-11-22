@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 TASKS = ["attack", "move", "hold", "withdraw", "garrison", "climb", "attack_building", "occupy", "assault",
-         "ai_assault"]
+         "ai_assault", "ai_attack", "ai_defend"]
 BUILDING_TASKS = {"garrison", "climb", "attack_building"}
 
 PLAN_SCHEMA = {
@@ -37,13 +37,17 @@ PLAN_SCHEMA = {
                                             "ring up to the top, a third of the missile units shoot the defenders, "
                                             "cavalry waits; ai_assault: hand the group to the game's own battle AI "
                                             "to storm the castle (in a field battle it attacks the nearest "
-                                            "enemies) - neither needs target/building/position"},
-                    "target": {"type": ["integer", "null"], "description": "attack: id of an ENEMY unit"},
+                                            "enemies) - neither needs target/building/position; ai_attack: the "
+                                            "game's own battle AI attacks with the group, starting with `target` "
+                                            "(null = the nearest enemy); ai_defend: the game's own battle AI "
+                                            "holds the area around `position` (null = where the group stands) "
+                                            "and fights whatever comes into it. Not for ships"},
+                    "target": {"type": ["integer", "null"], "description": "attack / ai_attack: id of an ENEMY unit"},
                     "building": {"type": ["integer", "null"],
                                  "description": "garrison/climb/attack_building: id of a building from "
                                                 "FORTIFICATIONS (the number after 'b')"},
                     "position": {"type": ["array", "null"], "items": {"type": "number"}, "minItems": 2,
-                                 "maxItems": 2, "description": "move/hold: [x, y] where the group's centre goes"},
+                                 "maxItems": 2, "description": "move/hold: [x, y] where the group's centre goes; ai_defend: the point to hold"},
                     "via": {"type": ["array", "null"], "maxItems": 3,
                             "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
                             "description": "optional route: up to 3 [x, y] waypoints the group goes through first "
@@ -107,6 +111,10 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
             continue
         task = g.get("task") if g.get("task") in TASKS else "hold"
         target = _int(g.get("target"))
+        if task == "ai_attack" and target is not None and target not in enemies:
+            problems.append(f"group '{g.get('name')}': ai_attack target {g.get('target')} is not a live enemy unit;"
+                            f" the game's AI starts with the nearest instead")
+            target = None
         if task == "attack" and target not in enemies:
             if enemies:
                 # usually a ship sunk or a unit gone while the model was thinking (battle 190434: the fleet held
@@ -117,7 +125,7 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
                 problems.append(f"group '{g.get('name')}': attack target {g.get('target')} is not an enemy unit;"
                                 f" holding")
                 task = "hold"
-        if task != "attack":
+        if task not in ("attack", "ai_attack"):
             target = None
         building = _int(g.get("building"))
         if task in BUILDING_TASKS and building not in (buildings or set()):
