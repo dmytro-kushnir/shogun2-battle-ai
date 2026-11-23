@@ -701,6 +701,14 @@ def test_square_and_lonely_general():
     assert lines and "DANGER" in lines[1] and "20001" in lines[1], lines
     gen.y = -330
     assert not report.general_alone_section(spears + [gen], cav)
+    # inside a square (sides 60 m off, battle 153457): no warning; behind a line 60 m off: a warning
+    for i, s in enumerate(spears):
+        s.x, s.y = 60 * m.sin(m.radians(60 * i)), -300 + 60 * m.cos(m.radians(60 * i))
+    gen.x, gen.y = 0, -300
+    assert not report.general_alone_section(spears + [gen], cav)
+    for i, s in enumerate(spears):
+        s.x, s.y = -100 + 40 * i, -240
+    assert report.general_alone_section(spears + [gen], cav)
 
 
 if __name__ == "__main__":

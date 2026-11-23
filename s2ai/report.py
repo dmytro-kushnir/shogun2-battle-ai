@@ -71,6 +71,10 @@ IDLE_WARN_S = 75.0
 # killed, and the army broke with 1000 of 1240 men standing. Warn while he stands apart with enemies near.
 GENERAL_ALONE_M = 45.0     # no own fighting unit (other than generals) this close
 GENERAL_THREAT_M = 200.0   # ...and an enemy this close
+# ...unless own units ring him (battle 20261123-153457: inside an 8-unit square the sides stand 55-63 m from the
+# general, and the warning fired 12 times; the general broke the square twice to "protect" him)
+GENERAL_RING_M = 90.0      # own units this close around him...
+GENERAL_RING_GAP_DEG = 100.0  # ...with no gap between their bearings wider than this
 
 
 # Reinforcements waiting off the map all sit still on one point from the start (battle 20261121-080322: 18
@@ -419,6 +423,10 @@ def general_alone_section(ours: list[U], enemies: list[U]) -> list[str]:
             continue
         f = min(friends, key=lambda u: dist(g, u))
         e = min(enemies, key=lambda u: dist(g, u))
+        ring = sorted(bearing(g.x, g.y, u.x, u.y) for u in friends if dist(g, u) < GENERAL_RING_M)
+        gaps = [b - a for a, b in zip(ring, ring[1:])] + [ring[0] + 360 - ring[-1]] if len(ring) >= 3 else [360]
+        if max(gaps) <= GENERAL_RING_GAP_DEG:
+            continue  # inside a square
         if dist(g, f) > GENERAL_ALONE_M and dist(g, e) < GENERAL_THREAT_M:
             out.append(f"DANGER: your general {g.id} stands alone - nearest own unit {f.id} {dist(g, f):.0f} m "
                        f"away, enemy {e.id} ({e.kind}) {dist(g, e):.0f} m away. If he dies, the whole army may "
