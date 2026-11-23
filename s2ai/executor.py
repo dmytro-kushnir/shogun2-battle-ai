@@ -118,6 +118,35 @@ def line_slots(n: int, cx: float, cy: float, facing: float, widths: list[float])
     return slots
 
 
+# Square (battle 20261123-152116: six yari ashigaru units and the general against six heavy cavalry units): a
+# line of spears is open at the flanks and behind, the cavalry rode round it, and the general, alone behind the
+# line, was charged and killed - the whole army broke with 1000 of its 1240 men still standing. In a square the
+# infantry units form the sides of a closed ring facing outwards, everyone else of the group (the general,
+# cavalry, missile units) stands inside it. The units fight what charges them; the engage reflex only reaches
+# SQUARE_ENGAGE_M so nobody leaves the ring to chase horsemen.
+SQUARE_MIN_SIDES = 3
+SQUARE_DEPTH_M = 4.0     # a side's centre sits this far outside the ring's inner edge (half a unit's depth)
+SQUARE_ENGAGE_M = 10.0
+
+
+def square_slots(n: int, cx: float, cy: float, facing: float, side: float) -> list[tuple[float, float, float]]:
+    """n sides of a closed ring (a regular polygon) around (cx, cy), the first one facing `facing`:
+    -> [(x, y, outward facing)] clockwise."""
+    apothem = side / (2 * math.tan(math.pi / n)) + SQUARE_DEPTH_M
+    out = []
+    for i in range(n):
+        f = (facing + 360.0 * i / n) % 360
+        out.append((cx + math.sin(math.radians(f)) * apothem, cy + math.cos(math.radians(f)) * apothem, f))
+    return out
+
+
+def square_members(members: list[U]) -> tuple[list[U], list[U]]:
+    """-> (units forming the sides: melee infantry first, then missile infantry; units inside the ring)."""
+    sides = [u for u in members if u.kind == "inf" and not u.general]
+    sides.sort(key=lambda u: u.missile)
+    return sides, [u for u in members if u not in sides]
+
+
 class Executor:
     def __init__(self, ai: int, timings: dict[str, dict] | None = None, stats: dict[str, dict] | None = None):
         self.ai = ai
@@ -126,6 +155,7 @@ class Executor:
         self.plan: dict | None = None
         self.plan_t = 0.0
         self.slots: dict[int, tuple[float, float, float]] = {}  # unit -> (x, y, facing) of its group's line
+        self.slot_width: dict[int, float] = {}                  # unit -> frontage it forms at (sides of a square)
         self.issued: dict[int, tuple[str, float]] = {}          # unit -> (signature, battle time sent)
         self.engaged: dict[int, int] = {}                      # unit -> enemy it is engaging by reflex
         self.last_orders: list[dict] = []
@@ -190,6 +220,7 @@ class Executor:
         """-> problems (abilities that are not ready are dropped)."""
         self.plan, self.plan_t = plan, t
         self.slots = {}
+        self.slot_width = {}
         self.retarget = {}  # a new plan: its targets first, replacements chosen afresh
         problems = []
         self.pending_abilities = []
@@ -225,6 +256,25 @@ class Executor:
             else:
                 cx, cy = sum(u.x for u in members) / len(members), sum(u.y for u in members) / len(members)
             facing = g["facing"] if g["facing"] is not None else bearing(cx, cy, ecx, ecy)
+            if g.get("formation") == "square":
+                sides, inside = square_members(members)
+                if len(sides) >= SQUARE_MIN_SIDES:
+                    side = max((u.w or DEFAULT_WIDTH_M) for u in sides) + SPACING_EXTRA_M / 2
+                    ring = square_slots(len(sides), cx, cy, facing, side)
+                    # each unit takes the side whose direction from the centre is closest to where it stands now
+                    # (tried for every rotation of the ring order, so nobody crosses the square)
+                    sides.sort(key=lambda u: bearing(cx, cy, u.x, u.y))
+                    best = min(range(len(sides)), key=lambda k: sum(
+                        math.hypot(u.x - ring[(i + k) % len(ring)][0], u.y - ring[(i + k) % len(ring)][1])
+                        for i, u in enumerate(sides)))
+                    for i, u in enumerate(sides):
+                        x, y, f = ring[(i + best) % len(ring)]
+                        self.slots[u.id] = (x, y, f)
+                        self.slot_width[u.id] = side - SPACING_EXTRA_M / 2
+                    for u, (sx, sy) in zip(inside, line_slots(len(inside), cx, cy, facing,
+                                                              [min(u.w or 20.0, 20.0) for u in inside])):
+                        self.slots[u.id] = (sx, sy, facing)
+                    continue
             rad = math.radians(facing)
             rx, ry = math.sin(rad + math.pi / 2), math.cos(rad + math.pi / 2)
             # keep left-to-right order as they stand now, so units do not cross each other's paths
@@ -624,13 +674,16 @@ class Executor:
             return {"cmd": "move", "unit": u.id, "x": x, "y": y, "facing": (away + 180) % 360, "run": True,
                     "_sig": f"evade:{near.id}:{round(x / 20)}:{round(y / 20)}"}
 
-        # reflex: engage what comes close (and stay on it until it breaks)
-        if reflexes and g["engage_within_m"] > 0:
+        # reflex: engage what comes close (and stay on it until it breaks); a square only fights what reaches it
+        engage = g["engage_within_m"] if g is not None else 0.0
+        if g is not None and g.get("formation") == "square" and u.id in self.slots:
+            engage = min(engage, SQUARE_ENGAGE_M)
+        if reflexes and engage > 0:
             cur = by_id.get(self.engaged.get(u.id, -1))
-            if cur is not None and cur.fighting_fit and dist(u, cur) < g["engage_within_m"] * 2:
+            if cur is not None and cur.fighting_fit and dist(u, cur) < engage * 2:
                 return {"cmd": "attack", "unit": u.id, "target": cur.id, "run": True, "_sig": f"attack:{cur.id}"}
             self.engaged.pop(u.id, None)
-            pick = self._best_target(u, enemies, within=g["engage_within_m"])
+            pick = self._best_target(u, enemies, within=engage)
             if pick is not None and not (u.kind == "cav" and matchup(u, pick, self.stats) > 2):
                 self.engaged[u.id] = pick.id  # (cavalry does not ride into spears by reflex)
                 return {"cmd": "attack", "unit": u.id, "target": pick.id, "run": True, "_sig": f"attack:{pick.id}"}
@@ -705,7 +758,7 @@ class Executor:
         if slot is None:
             return None
         x, y, facing = slot
-        width = line_width(u)
+        width = self.slot_width.get(u.id) or line_width(u)
         if math.hypot(u.x - x, u.y - y) < 8 and abs(((u.h - facing) + 180) % 360 - 180) < 20 and \
                 not (width and u.w and width > u.w + 5):
             return None  # in its slot and formed: nothing to do

@@ -20,7 +20,7 @@ PLAN_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["name", "units", "task", "target", "building", "position", "via", "facing", "run",
+                "required": ["name", "units", "task", "target", "building", "position", "via", "facing", "formation", "run",
                              "engage_within_m", "keep_range_m", "shot"],
                 "properties": {
                     "name": {"type": "string", "description": "e.g. 'left wing cavalry'"},
@@ -55,6 +55,11 @@ PLAN_SCHEMA = {
                                            "straight there"},
                     "facing": {"type": ["number", "null"],
                                "description": "move/hold: compass degrees the line faces; null = towards the enemy"},
+                    "formation": {"type": "string", "enum": ["line", "square"],
+                                  "description": "move/hold: line = side by side facing `facing`; square = the "
+                                                 "group's infantry forms a closed ring facing outwards around "
+                                                 "`position` (needs 3+ infantry units), its general, cavalry and "
+                                                 "guns stand inside - no flank or rear to ride into"},
                     "run": {"type": "boolean"},
                     "engage_within_m": {"type": "number",
                                         "description": "reflex: attack any enemy that comes this close, then return "
@@ -148,7 +153,9 @@ def validate(plan: dict, ours: set[int], enemies: set[int],
         groups.append({
             "name": str(g.get("name") or "group")[:60], "units": units, "task": task, "target": target,
             "building": building,
-            "position": pos, "via": via[:3] or None, "facing": _num(g.get("facing")), "run": bool(g.get("run")),
+            "position": pos, "via": via[:3] or None, "facing": _num(g.get("facing")),
+            "formation": "square" if g.get("formation") == "square" and task in ("move", "hold") else "line",
+            "run": bool(g.get("run")),
             "engage_within_m": max(0.0, _num(g.get("engage_within_m")) or 0.0),
             "keep_range_m": max(0.0, _num(g.get("keep_range_m")) or 0.0),
             "shot": g["shot"] if isinstance(g.get("shot"), str) and re.fullmatch(r"[a-z_]{3,40}", g["shot"]) else None,

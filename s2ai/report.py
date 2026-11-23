@@ -67,6 +67,10 @@ SHIP_HULL_DANGER = 0.15
 # idle opponent dull. After this long without a plan that sends a real share of the army forward the report
 # says so.
 IDLE_WARN_S = 75.0
+# Battle 20261123-152116: the general rode 80 m behind his spears with enemy cavalry around, was charged and
+# killed, and the army broke with 1000 of 1240 men standing. Warn while he stands apart with enemies near.
+GENERAL_ALONE_M = 45.0     # no own fighting unit (other than generals) this close
+GENERAL_THREAT_M = 200.0   # ...and an enemy this close
 
 
 # Reinforcements waiting off the map all sit still on one point from the start (battle 20261121-080322: 18
@@ -407,6 +411,21 @@ def state_word(u: U, nearest_enemy_m: float | None) -> str:
     return "standing"
 
 
+def general_alone_section(ours: list[U], enemies: list[U]) -> list[str]:
+    out = []
+    for g in (u for u in ours if u.general and u.fighting_fit and u.kind != "ship"):
+        friends = [u for u in ours if u.fighting_fit and not u.general]
+        if not friends or not enemies:
+            continue
+        f = min(friends, key=lambda u: dist(g, u))
+        e = min(enemies, key=lambda u: dist(g, u))
+        if dist(g, f) > GENERAL_ALONE_M and dist(g, e) < GENERAL_THREAT_M:
+            out.append(f"DANGER: your general {g.id} stands alone - nearest own unit {f.id} {dist(g, f):.0f} m "
+                       f"away, enemy {e.id} ({e.kind}) {dist(g, e):.0f} m away. If he dies, the whole army may "
+                       f"break: put him in the group of your infantry (inside a square, or right behind its line).")
+    return [""] + out if out else []
+
+
 def unit_line(u: U, enemies: list[U], show_nearest: bool, extra: str = "") -> str:
     near = min(enemies, key=lambda e: dist(u, e)) if enemies else None
     d = dist(u, near) if near else None
@@ -637,6 +656,7 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
             out.append(f"TEMPO: your plans have not sent the army forward for {idle_s:.0f}s. Unless the enemy is "
                        "closing in on you right now, take the initiative: advance, flank, threaten their guns or "
                        "probe their line. The player came for a fight.")
+    out.extend(general_alone_section(ours, fit_theirs))
     if not forts and not naval:  # in a siege the castle is the formation; at sea there are no flanks to ride
         out.extend(formation_section(theirs, ours))
     if terrain is not None and not naval:
@@ -688,5 +708,7 @@ def build(static: dict[int, dict], state: dict, ai: int, events: list[dict], pla
                     "occupy": f"occupy {g['position']}"}.get(g["task"], g["task"])
             via = f" via {' -> '.join(f'({w[0]:.0f},{w[1]:.0f})' for w in g['via'])}" if g.get("via") else ""
             shot = f", firing {g['shot']}" if g.get("shot") else ""
+            if g.get("formation") == "square" and g["task"] in ("move", "hold"):
+                what += " in a square"
             out.append(f"  - {g['name']}: {g['units']}{via} {what}{shot}")
     return "\n".join(out), units

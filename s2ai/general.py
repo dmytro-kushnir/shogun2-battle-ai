@@ -111,6 +111,13 @@ How to answer:
 - Put every one of your fighting units in exactly one group. Give each group one task.
 - attack: `target` = an enemy id. move: `position` = [x, y] for the group's centre; the units form a line there
   facing `facing` (compass degrees; null = towards the enemy). hold: like move, `position` null = stay where they are.
+- Formations: move/hold groups form a line by default. formation "square" puts the group's infantry in a closed
+  ring facing outwards around `position`, with the group's general, cavalry and guns inside. Use it when enemy
+  cavalry outnumbers or outruns yours and can ride round your flanks or into your rear - spears in a square are
+  the answer to a cavalry army. Infantry cannot catch horsemen: do not send it chasing cavalry (it scatters and
+  opens gaps); let the cavalry come onto the spears, and attack only riders that are stuck in melee or wavering.
+- Your general's death can break your whole army. Keep him with your infantry (in its group, inside a square or
+  just behind its line), never alone between the armies or behind an empty space while enemy cavalry is about.
 - The game's own battle AI can also run a group for you: ai_attack (it attacks, starting with `target` or the
   nearest enemy, and picks its own targets, formations and flanks after that) and ai_defend (it holds the area
   within ~100 m of `position`, null = where the group stands, and fights whatever comes in). Hand a group over

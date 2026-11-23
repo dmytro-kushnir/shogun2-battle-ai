@@ -657,6 +657,52 @@ def test_game_ai_attack_and_defend():
     assert [o for o in ex4.tick(inf + [cav], 0)[1] if o.get("group") == "guard"]
 
 
+def test_square_and_lonely_general():
+    import math as m
+    from s2ai import report
+    # battle 20261123-152116: six spear units and the general against six heavy cavalry units
+    spears = [unit(20002 + i, 2, -100 + 40 * i, -300, "inf", 200, "Inf_Spear_Yari_Ashigaru") for i in range(6)]
+    for s in spears:
+        s.w = 47.5
+    gen = unit(20001, 2, 0, -340)
+    gen.general = True
+    cav = [unit(10002 + i, 1, -50 + 30 * i, 300) for i in range(4)]
+    us = spears + [gen] + cav
+    raw = plan_of(group([u.id for u in spears] + [20001], task="hold", engage=40))
+    raw["groups"][0]["position"], raw["groups"][0]["formation"] = [0, -300], "square"
+    plan, probs = validate(raw, {u.id for u in spears} | {20001}, {u.id for u in cav}, set(), {})
+    assert not probs and plan["groups"][0]["formation"] == "square", probs
+    ex = Executor(2, TIMINGS, STATS)
+    ex.set_plan(plan, us, 0)
+    orders = {o["unit"]: o for o in ex.tick(us, 0)[1] if o["cmd"] == "move"}
+    ring = [orders[u.id] for u in spears]
+    rs = [m.hypot(o["x"], o["y"] + 300) for o in ring]
+    assert max(rs) - min(rs) < 1 and 40 < rs[0] < 60, rs                    # all on one ring around the point
+    for o in ring:                                                           # each faces outwards
+        out = m.degrees(m.atan2(o["x"], o["y"] + 300)) % 360
+        assert abs((o["facing"] - out + 180) % 360 - 180) < 1, (o, out)
+    assert len({round(o["facing"]) for o in ring}) == 6 and all(o["width"] > 45 for o in ring), ring
+    assert m.hypot(orders[20001]["x"], orders[20001]["y"] + 300) < 5, orders[20001]   # the general inside
+    # a horseman 30 m off a side: no unit leaves the ring for it (the reflex reaches only SQUARE_ENGAGE_M)
+    for u, o in zip(spears, ring):
+        u.x, u.y, u.h = o["x"], o["y"], o["facing"]
+    cav[0].x, cav[0].y = ring[0]["x"] + 30 * m.sin(m.radians(ring[0]["facing"])),         ring[0]["y"] + 30 * m.cos(m.radians(ring[0]["facing"]))
+    assert not [o for o in ex.tick(us, 5)[1] if o["cmd"] == "attack"]
+    # a square needs 3+ infantry units; with fewer the group forms a line; the plan text says "in a square"
+    raw2 = plan_of(group([20002, 20003, 20001], task="hold"))
+    raw2["groups"][0]["formation"] = "square"
+    p2, _ = validate(raw2, {20002, 20003, 20001}, set(), set(), {})
+    ex2 = Executor(2, TIMINGS, STATS)
+    ex2.set_plan(p2, us, 0)
+    assert not ex2.slot_width
+    # the general alone with enemies about: a DANGER line in the report
+    gen.x, gen.y = 0, -420
+    lines = report.general_alone_section(spears + [gen], cav)
+    assert lines and "DANGER" in lines[1] and "20001" in lines[1], lines
+    gen.y = -330
+    assert not report.general_alone_section(spears + [gen], cav)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
